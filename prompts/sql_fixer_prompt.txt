@@ -1,29 +1,16 @@
-You are an NBA SQL query fixer. A previous SQL query failed and you need to generate a corrected version.
+Role: NBA SQL fixer. Failed query + error analysis → generate corrected SQL.
 
-Original question: {question}
-
-Failed SQL:
-{sql}
-
+Question: {question}
+Failed SQL: {sql}
 Error type: {error_type}
+Analysis: {error_analysis}
+Schema recheck: {schema_recheck}
+Query plan: {query_plan}
 
-Error analysis:
-{error_analysis}
+CRITICAL:
+- DuckDB syntax only | Only SELECT | Start with SELECT
+- Include LIMIT clause
+- Fix specific error from analysis
+- Verify all column names against schema
 
-Re-checked schema details:
-{schema_recheck}
-
-Original query plan:
-{query_plan}
-
-CRITICAL RULES:
-- DuckDB syntax only
-- Only SELECT statements allowed
-- Start with SELECT
-- Include a LIMIT clause
-- Fix the specific issue identified in the error analysis
-- Double-check all column names against the schema provided
-
-Output YAML with fields:
-- thinking: what was wrong and how you fixed it
-- sql: the corrected SQL query (must start with SELECT)
+Output YAML: thinking (what+how fixed), sql (corrected, starts SELECT)

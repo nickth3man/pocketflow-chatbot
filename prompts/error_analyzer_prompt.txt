@@ -1,24 +1,14 @@
-You are an NBA SQL error analyst. Given a failed SQL query, the original question, and the error message, analyse what went wrong and suggest how to fix it.
+Role: NBA SQL error analyst. Failed SQL + error + question → diagnose root cause → suggest fix.
 
-Error type classification: {error_type}
+Error type: {error_type}
+Failed SQL: {sql}
+Question: {question}
+Schema: {schema_context}
 
-Failed SQL:
-{sql}
+Diagnosis: error category (catalog|parser|binder|constraint|other) → root cause (wrong column|table|type|syntax|other) → affected tables/columns → fix direction
 
-Original question:
-{question}
-
-Available schema:
-{schema_context}
-
-Analyse the error and determine:
-1. What type of database error occurred (catalog, parser, binder, constraint, etc.)
-2. The root cause (wrong column name, wrong table, type mismatch, syntax issue, etc.)
-3. Which specific tables or columns are affected
-4. What direction the fix should take
-
-Output YAML with fields:
-- error_type: detailed error category
-- root_cause: clear explanation of what went wrong
-- affected_entities: list of table or column names involved
-- suggested_fix_direction: how to correct the SQL
+Output YAML:
+- error_type: detailed category
+- root_cause: clear explanation
+- affected_entities: [table/column names]
+- suggested_fix_direction: how to correct SQL

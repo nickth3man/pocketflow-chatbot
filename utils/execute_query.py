@@ -3,6 +3,8 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 import duckdb
 
+_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+
 
 def _run_query(
     db_path: str, sql: str, max_rows: int
@@ -29,32 +31,31 @@ def execute_query(
 ) -> dict:
     start = time.time()
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_run_query, db_path, sql, max_rows)
-        try:
-            columns, rows, elapsed_ms = future.result(timeout=timeout_seconds)
-            return {
-                "success": True,
-                "columns": columns,
-                "rows": rows,
-                "elapsed_ms": elapsed_ms,
-                "error": None,
-            }
-        except TimeoutError:
-            elapsed_ms = (time.time() - start) * 1000
-            return {
-                "success": False,
-                "columns": [],
-                "rows": [],
-                "elapsed_ms": elapsed_ms,
-                "error": f"Query timed out after {timeout_seconds} seconds",
-            }
-        except duckdb.Error as e:
-            elapsed_ms = (time.time() - start) * 1000
-            return {
-                "success": False,
-                "columns": [],
-                "rows": [],
-                "elapsed_ms": elapsed_ms,
-                "error": str(e),
-            }
+    future = _EXECUTOR.submit(_run_query, db_path, sql, max_rows)
+    try:
+        columns, rows, elapsed_ms = future.result(timeout=timeout_seconds)
+        return {
+            "success": True,
+            "columns": columns,
+            "rows": rows,
+            "elapsed_ms": elapsed_ms,
+            "error": None,
+        }
+    except TimeoutError:
+        elapsed_ms = (time.time() - start) * 1000
+        return {
+            "success": False,
+            "columns": [],
+            "rows": [],
+            "elapsed_ms": elapsed_ms,
+            "error": f"Query timed out after {timeout_seconds} seconds",
+        }
+    except duckdb.Error as e:
+        elapsed_ms = (time.time() - start) * 1000
+        return {
+            "success": False,
+            "columns": [],
+            "rows": [],
+            "elapsed_ms": elapsed_ms,
+            "error": str(e),
+        }

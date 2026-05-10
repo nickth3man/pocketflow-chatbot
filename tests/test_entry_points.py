@@ -255,3 +255,203 @@ class TestHistoryContextBuilderEdgeCases:
         assert len(result) > 0
         assert "[user:" in result
         assert "[assistant:" in result
+
+
+class TestAppFormatStepTrace:
+    @pytest.mark.modify_env()
+    def test_format_step_trace_empty(self, mocker):
+        mocker.patch("app.load_dotenv")
+        from app import _format_step_trace_html
+
+        result = _format_step_trace_html([])
+        assert result == ""
+
+    @pytest.mark.modify_env()
+    def test_format_step_trace_with_steps(self, mocker):
+        mocker.patch("app.load_dotenv")
+        from app import _format_step_trace_html
+
+        logs = [
+            {"node": "Preprocess", "status": "complete", "summary": "cleaned message"},
+            {"node": "SQLExecutor", "status": "error", "summary": "query failed"},
+        ]
+        result = _format_step_trace_html(logs)
+        assert "Preprocess" in result
+        assert "SQLExecutor" in result
+        assert "complete" in result
+        assert "error" in result
+        assert "cleaned message" in result
+        assert "query failed" in result
+
+    @pytest.mark.modify_env()
+    def test_format_step_trace_single_step(self, mocker):
+        mocker.patch("app.load_dotenv")
+        from app import _format_step_trace_html
+
+        logs = [{"node": "Test", "status": "complete", "summary": "done"}]
+        result = _format_step_trace_html(logs)
+        assert "Test" in result
+        assert "done" in result
+
+
+class TestAppOnClear:
+    @pytest.mark.modify_env()
+    @pytest.mark.enable_socket(allow_hosts=["127.0.0.1", "localhost"])
+    def test_on_clear_returns_empty_and_resets(self, mocker):
+        import app as app_mod
+
+        mocker.patch.object(app_mod, "get_full_schema", return_value={"dummy": {}})
+        mocker.patch.dict(
+            os.environ,
+            {
+                "OPENROUTER_API_KEY": "test",
+                "OPENROUTER_MODEL": "test",
+                "DUCKDB_PATH": __file__,
+            },
+        )
+        from app import _on_clear
+
+        # Ensure shared is initialized
+        app_mod.get_shared()
+        result = _on_clear()
+        assert result == ""
+
+
+class TestQueryPlannerPlanAsList:
+    def test_post_converts_list_plan_to_string(self, shared):
+        from nodes import QueryPlannerNode
+
+        node = QueryPlannerNode()
+        exec_res = {
+            "plan": ["Step 1: join", "Step 2: filter", "Step 3: aggregate"],
+            "tables_used": [],
+            "filters": [],
+            "aggregations": [],
+        }
+        node.post(shared, None, exec_res)
+        assert isinstance(shared["query_plan"], str)
+        assert shared["query_plan"] == "Step 1: join, Step 2: filter, Step 3: aggregate"
+
+
+class TestMainBuildSharedPaths:
+    @pytest.mark.modify_env()
+    def test_main_build_shared_missing_api_key(self, mocker):
+        mocker.patch.dict(
+            os.environ,
+            {"OPENROUTER_API_KEY": "", "OPENROUTER_MODEL": "test"},
+            clear=True,
+        )
+        import main as main_mod
+
+        with pytest.raises(SystemExit):
+            main_mod.build_shared()
+
+    @pytest.mark.modify_env()
+    def test_main_build_shared_missing_model(self, mocker):
+        mocker.patch.dict(
+            os.environ,
+            {"OPENROUTER_API_KEY": "test", "OPENROUTER_MODEL": ""},
+            clear=True,
+        )
+        import main as main_mod
+
+        with pytest.raises(SystemExit):
+            main_mod.build_shared()
+
+    @pytest.mark.modify_env()
+    def test_main_build_shared_missing_db(self, mocker):
+        mocker.patch.dict(
+            os.environ,
+            {
+                "OPENROUTER_API_KEY": "test",
+                "OPENROUTER_MODEL": "test",
+                "DUCKDB_PATH": "/nonexistent/path.duckdb",
+            },
+            clear=True,
+        )
+        import main as main_mod
+
+        with pytest.raises(SystemExit):
+            main_mod.build_shared()
+
+    @pytest.mark.modify_env()
+    def test_main_function_one_iteration(self, mocker):
+        import main as main_mod
+
+        mocker.patch.object(main_mod, "get_full_schema", return_value={"dummy": {}})
+        mocker.patch.object(main_mod.chat_flow, "run")
+        mocker.patch.dict(
+            os.environ,
+            {
+                "OPENROUTER_API_KEY": "test",
+                "OPENROUTER_MODEL": "test",
+                "DUCKDB_PATH": __file__,
+            },
+            clear=True,
+        )
+        mocker.patch("builtins.input", side_effect=["hello", "quit"])
+        mocker.patch("builtins.print")
+
+        main_mod.main()
+
+    @pytest.mark.modify_env()
+    def test_main_empty_input_skips(self, mocker):
+        import main as main_mod
+
+        mocker.patch.object(main_mod, "get_full_schema", return_value={"dummy": {}})
+        mocker.patch.object(main_mod.chat_flow, "run")
+        mocker.patch.dict(
+            os.environ,
+            {
+                "OPENROUTER_API_KEY": "test",
+                "OPENROUTER_MODEL": "test",
+                "DUCKDB_PATH": __file__,
+            },
+            clear=True,
+        )
+        mocker.patch("builtins.input", side_effect=["", "quit"])
+        mocker.patch("builtins.print")
+
+        main_mod.main()
+
+    @pytest.mark.modify_env()
+    def test_main_eof_error_breaks(self, mocker):
+        import main as main_mod
+
+        mocker.patch.object(main_mod, "get_full_schema", return_value={"dummy": {}})
+        mocker.patch.object(main_mod.chat_flow, "run")
+        mocker.patch.dict(
+            os.environ,
+            {
+                "OPENROUTER_API_KEY": "test",
+                "OPENROUTER_MODEL": "test",
+                "DUCKDB_PATH": __file__,
+            },
+            clear=True,
+        )
+        mocker.patch("builtins.input", side_effect=EOFError)
+        mocker.patch("builtins.print")
+
+        main_mod.main()
+
+
+class TestLoggingSetup:
+    def test_get_logger_returns_nba_chatbot_logger(self):
+        from utils.logging_setup import get_logger
+
+        logger = get_logger()
+        assert logger.name == "nba_chatbot"
+
+    def test_setup_logging_returns_logger(self):
+        from utils.logging_setup import setup_logging
+
+        logger = setup_logging()
+        assert logger.name == "nba_chatbot"
+        assert logger.level <= 10  # DEBUG level
+
+    def test_setup_logging_is_idempotent(self):
+        from utils.logging_setup import setup_logging
+
+        logger1 = setup_logging()
+        logger2 = setup_logging()
+        assert logger1 is logger2

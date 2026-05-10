@@ -1,9 +1,9 @@
-import logging
 import os
 import sys
 import threading
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -46,7 +46,11 @@ def build_shared() -> dict[str, Any]:
     logger.debug("build_shared: OPENROUTER_MODEL loaded: %s", model)
 
     db_path_raw = os.environ.get("DUCKDB_PATH", _DEFAULT_DB_PATH)
-    db_path = str(_PROJECT_ROOT / db_path_raw) if not os.path.isabs(db_path_raw) else db_path_raw
+    db_path = (
+        str(_PROJECT_ROOT / db_path_raw)
+        if not os.path.isabs(db_path_raw)
+        else db_path_raw
+    )
     logger.debug("build_shared: resolved db_path=%s", db_path)
     db_query_timeout = int(os.environ.get("DB_QUERY_TIMEOUT", "30"))
 
@@ -179,9 +183,7 @@ def handle_submit(
     step_logs = shared.get("step_logs", [])
     history.append({
         "role": "assistant",
-        "content": shared.get(
-            "response", "Sorry, I couldn't generate a response."
-        ),
+        "content": shared.get("response", "Sorry, I couldn't generate a response."),
     })
     step_html = _format_step_trace_html(step_logs)
     yield "", history, step_html

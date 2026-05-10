@@ -12,9 +12,10 @@ def get_full_schema(db_path: str) -> dict:
         schema_by_table: dict = {}
         for table_name, table_type in tables:
             columns = con.execute(
-                f"SELECT column_name, data_type FROM information_schema.columns "
-                f"WHERE table_name = '{table_name}' AND table_schema = 'main' "
-                f"ORDER BY ordinal_position"
+                "SELECT column_name, data_type FROM information_schema.columns "
+                "WHERE table_name = ? AND table_schema = 'main' "
+                "ORDER BY ordinal_position",
+                [table_name],
             ).fetchall()
 
             count_row = con.execute(f'SELECT count(*) FROM "{table_name}"').fetchone()

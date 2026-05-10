@@ -181,6 +181,17 @@ class TestYamlInternals:
         result = _rebuild_yaml("just some random text", ["required_field"])
         assert result == "just some random text"
 
+    def test_fix_yaml_quoting_preserves_non_key_lines(self):
+        text = "  - item1\n  - item2\nkey: value: with colon"
+        result = _fix_yaml_quoting(text)
+        assert "  - item1" in result
+        assert "  - item2" in result
+        assert '"value: with colon"' in result
+
+    def test_fix_yaml_quoting_empty_value(self):
+        result = _fix_yaml_quoting("key: ")
+        assert result == "key: "
+
 
 class TestFreezeTimeDemo:
     @pytest.mark.freeze_time("2025-06-01")

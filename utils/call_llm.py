@@ -22,6 +22,9 @@ def call_llm(
         )
     messages.append(ChatCompletionUserMessageParam(role="user", content=prompt))
     r: Any = client.chat.completions.create(model=model, messages=messages)
+    if not r.choices:
+        raise ValueError("LLM returned no choices")
     content = r.choices[0].message.content
-    assert content is not None
+    if content is None:
+        raise ValueError("LLM returned null content")
     return content

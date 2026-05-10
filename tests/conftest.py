@@ -1,7 +1,34 @@
+import os
 from typing import Any
 
 import pytest
+from hypothesis import HealthCheck, settings
 from pytest_check import check as check
+
+settings.register_profile(
+    "default",
+    deadline=None,
+    max_examples=100,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+settings.register_profile(
+    "ci",
+    deadline=None,
+    max_examples=300,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+settings.load_profile(os.getenv("HYPOTHESIS_PROFILE", "default"))
+
+
+@pytest.fixture
+def vcr_config() -> dict[str, Any]:
+    return {
+        "filter_headers": ["authorization", "cookie", "set-cookie"],
+        "filter_query_parameters": ["api_key", "key", "token"],
+        "record_mode": "none",
+        "decode_compressed_response": True,
+        "ignore_localhost": True,
+    }
 
 
 @pytest.fixture

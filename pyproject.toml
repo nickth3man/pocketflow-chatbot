@@ -47,6 +47,12 @@ dev = [
     "pyfakefs>=5.7",
     "pytest-ruff>=0.5",
     "setuptools>=82.0.1",
+    # Tier 4
+    "hypothesis>=6.152.4",
+    "respx>=0.23.1",
+    "pytest-recording>=0.13.4",
+    "pytest-httpserver>=1.1.5",
+    "pytest-benchmark>=5.2.3",
 ]
 
 # ── uv ──────────────────────────────────────────────────────────────────────
@@ -117,6 +123,10 @@ markers = [
     "slow: tests taking >5s (deselect with 'not slow')",
     "live_api: tests making real OpenRouter API calls",
     "modify_env: tests that intentionally modify os.environ (pytest-modified-env)",
+    "property: property-based tests powered by Hypothesis",
+    "http_mock: HTTP client tests using respx or pytest-httpserver",
+    "recording: cassette-backed HTTP tests using pytest-recording/VCR.py",
+    "benchmark: performance baseline tests using pytest-benchmark",
 ]
 filterwarnings = [
     "error",

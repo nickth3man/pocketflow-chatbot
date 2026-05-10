@@ -170,9 +170,7 @@ class TableSelectorNode(Node):
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
         schema_by_table = shared.get("schema_by_table", {})
         table_listing = "\n".join(f"- {name}" for name in schema_by_table)
-        _logger.debug(
-            "[TableSelector] prep: %d tables available", len(schema_by_table)
-        )
+        _logger.debug("[TableSelector] prep: %d tables available", len(schema_by_table))
         return {
             "clean_message": shared.get("clean_message", ""),
             "entities": shared.get("entities", {}),
@@ -198,9 +196,7 @@ class TableSelectorNode(Node):
             required_fields=["tables", "reason"],
             system_prompt=prep_res["system_prompt"],
         )
-        _logger.debug(
-            "[TableSelector] exec: selected tables=%s", result.get("tables")
-        )
+        _logger.debug("[TableSelector] exec: selected tables=%s", result.get("tables"))
         return result
 
     def post(
@@ -247,9 +243,7 @@ class QueryPlannerNode(Node):
             required_fields=["plan", "tables_used", "filters", "aggregations"],
             system_prompt=prep_res["system_prompt"],
         )
-        _logger.debug(
-            "[QueryPlanner] exec: tables_used=%s", result.get("tables_used")
-        )
+        _logger.debug("[QueryPlanner] exec: tables_used=%s", result.get("tables_used"))
         return result
 
     def post(
@@ -494,9 +488,7 @@ class SQLFixerNode(Node):
         super().__init__(max_retries=2, wait=1)
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
-        _logger.debug(
-            "[SQLFixer] prep: error_type=%s", shared.get("error_type", "")
-        )
+        _logger.debug("[SQLFixer] prep: error_type=%s", shared.get("error_type", ""))
         return {
             "clean_message": shared.get("clean_message", ""),
             "generated_sql": shared.get("generated_sql", ""),
@@ -651,7 +643,9 @@ class ResultAnalyzerNode(Node):
                 "attempts, the system was unable to generate a valid query. "
                 "Please try rephrasing your question."
             )
-            _logger.debug("[ResultAnalyzer] exec: no results, generating fallback narrative")
+            _logger.debug(
+                "[ResultAnalyzer] exec: no results, generating fallback narrative"
+            )
 
         prompt = system_prompt.format(
             question=prep_res["clean_message"],
@@ -662,7 +656,9 @@ class ResultAnalyzerNode(Node):
             api_key=prep_res["api_key"],
             model=prep_res["model"],
         )
-        _logger.debug("[ResultAnalyzer] exec: narrative=%s", result[:80].replace("\n", " "))
+        _logger.debug(
+            "[ResultAnalyzer] exec: narrative=%s", result[:80].replace("\n", " ")
+        )
         return result
 
     def exec_fallback(self, prep_res: Any, exc: Exception) -> str:
@@ -708,9 +704,7 @@ class ResponseBuilderNode(Node):
             sql=sql,
             elapsed_ms=elapsed_ms,
         )
-        _logger.debug(
-            "[ResponseBuilder] exec: response_length=%d", len(response)
-        )
+        _logger.debug("[ResponseBuilder] exec: response_length=%d", len(response))
         return response
 
     def post(self, shared: dict[str, Any], prep_res: Any, exec_res: str) -> str:
@@ -735,9 +729,7 @@ class ChatResponderNode(Node):
         super().__init__(max_retries=2, wait=1)
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
-        _logger.debug(
-            "[ChatResponder] prep: intent=%s", shared.get("intent", "chat")
-        )
+        _logger.debug("[ChatResponder] prep: intent=%s", shared.get("intent", "chat"))
         return {
             "clean_message": shared.get("clean_message", ""),
             "intent": shared.get("intent", "chat"),
@@ -763,7 +755,9 @@ class ChatResponderNode(Node):
             model=prep_res["model"],
             system_prompt=prompt,
         )
-        _logger.debug("[ChatResponder] exec: response=%s", result[:80].replace("\n", " "))
+        _logger.debug(
+            "[ChatResponder] exec: response=%s", result[:80].replace("\n", " ")
+        )
         return result
 
     def exec_fallback(self, prep_res: Any, exc: Exception) -> str:
