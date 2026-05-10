@@ -99,6 +99,7 @@ def main() -> None:
             break
 
         if not user_input:
+            print("Please enter a question about NBA basketball.")
             continue
 
         shared["user_message"] = user_input
@@ -109,7 +110,11 @@ def main() -> None:
             "sql": None,
             "error": False,
         })
-        chat_flow.run(shared)
+        try:
+            chat_flow.run(shared)
+        except Exception as e:
+            _logger.error("Flow crashed: %s", e)
+            shared["response"] = "Sorry, an unexpected error occurred. Please try rephrasing your question."
         response = shared.get("response", "Sorry, I couldn't generate a response.")
 
         print("\n── Step Trace ──────────────────────────────")

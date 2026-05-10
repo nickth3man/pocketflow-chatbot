@@ -177,6 +177,11 @@ class TableSelectorNode(Node):
         super().__init__(max_retries=2, wait=1)
         self._table_listing: str | None = None
 
+    def exec_fallback(self, prep_res: Any, exc: Exception) -> dict[str, Any]:
+        schema_by_table = prep_res.get("schema_by_table", {})
+        all_tables = list(schema_by_table.keys())
+        return {"tables": all_tables, "reason": "fallback: using all tables due to selection error"}
+
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
         schema_by_table: dict = shared.get("schema_by_table", {})  # type: ignore[no-redef]
         if self._table_listing is None:
@@ -225,6 +230,15 @@ class TableSelectorNode(Node):
 class QueryPlannerNode(Node):
     def __init__(self) -> None:
         super().__init__(max_retries=2, wait=1)
+
+    def exec_fallback(self, prep_res: Any, exc: Exception) -> dict[str, Any]:
+        question = prep_res.get("clean_message", "the user question") if prep_res else "the user question"
+        return {
+            "plan": f"Select all relevant columns to answer: {question}",
+            "tables_used": prep_res.get("entities", {}) if prep_res else [],
+            "filters": [],
+            "aggregations": [],
+        }
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
         cm = shared.get("clean_message", "")[:60]
@@ -405,6 +419,15 @@ class ErrorAnalyzerNode(Node):
     def __init__(self) -> None:
         super().__init__(max_retries=2, wait=1)
 
+    def exec_fallback(self, prep_res: Any, exc: Exception) -> dict[str, Any]:
+        error_type = prep_res.get("error_type", "unknown") if prep_res else "unknown"
+        return {
+            "error_type": error_type,
+            "root_cause": "Could not analyze error automatically",
+            "affected_entities": [],
+            "suggested_fix_direction": "Review the SQL query and schema carefully",
+        }
+
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
         error_msg = shared.get("execution_error", "")
         error_type = classify_error(error_msg)
@@ -497,6 +520,9 @@ class SchemaRecheckNode(Node):
 class SQLFixerNode(Node):
     def __init__(self) -> None:
         super().__init__(max_retries=2, wait=1)
+
+    def exec_fallback(self, prep_res: Any, exc: Exception) -> str:
+        return prep_res.get("generated_sql", "SELECT 'SQL fix failed' AS error") if prep_res else "SELECT 'SQL fix failed' AS error"
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
         _logger.debug("[SQLFixer] prep: error_type=%s", shared.get("error_type", ""))
@@ -614,7 +640,7 @@ class ResultAnalyzerNode(Node):
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
         sql_result = shared.get("sql_result")
-        has_results = (
+        has_results = bool(
             sql_result is not None
             and sql_result.get("success", False)
             and sql_result.get("rows")
