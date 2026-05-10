@@ -34,6 +34,7 @@ def setup_logging() -> logging.Logger:
     file_handler.setFormatter(
         logging.Formatter(
             "[%(asctime)s] %(levelname)-5s %(name)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
         )
     )
     logger.addHandler(file_handler)

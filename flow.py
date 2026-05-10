@@ -27,7 +27,7 @@ _logger = logging.getLogger("nba_chatbot")
 class ErrorRecoveryFlow(Flow):
     def post(self, shared: dict[str, Any], prep_res: Any, exec_res: Any) -> str:
         action = str(shared.get("recovery_action", "give_up"))
-        _logger.info("[ErrorRecoveryFlow] post: action=%s", action)
+        _logger.debug("[ErrorRecoveryFlow] post: action=%s", action)
         shared.setdefault("step_logs", []).append({
             "node": "ErrorRecoveryFlow",
             "status": "complete",
