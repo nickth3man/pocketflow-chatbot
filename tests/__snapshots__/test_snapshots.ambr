@@ -1,0 +1,208 @@
+# serializer version: 1
+# name: TestFormatSnapshots.test_format_response_markdown_full
+  '''
+  Found 12 players.
+  
+  
+  
+  | Name |
+  | --- |
+  | Curry |
+  
+  
+  
+  <details>
+  <summary>View SQL (42ms)</summary>
+  
+  ```sql
+  SELECT * FROM dim_player
+  ```
+  </details>
+  '''
+# ---
+# name: TestFormatSnapshots.test_format_response_markdown_no_sql
+  'Hello.'
+# ---
+# name: TestFormatSnapshots.test_format_results_table_basic
+  '''
+  | Name | Points |
+  | --- | --- |
+  | Curry | 30 |
+  | LeBron | 25 |
+  '''
+# ---
+# name: TestFormatSnapshots.test_format_results_table_empty
+  ''
+# ---
+# name: TestFormatSnapshots.test_format_results_table_truncation
+  '''
+  | X |
+  | --- |
+  | 0 |
+  | 1 |
+  | 2 |
+  | 3 |
+  | 4 |
+  | 5 |
+  | 6 |
+  | 7 |
+  | 8 |
+  | 9 |
+  | 10 |
+  | 11 |
+  | 12 |
+  | 13 |
+  | 14 |
+  | 15 |
+  | 16 |
+  | 17 |
+  | 18 |
+  | 19 |
+  | 20 |
+  | 21 |
+  | 22 |
+  | 23 |
+  | 24 |
+  | 25 |
+  | 26 |
+  | 27 |
+  | 28 |
+  | 29 |
+  | 30 |
+  | 31 |
+  | 32 |
+  | 33 |
+  | 34 |
+  | 35 |
+  | 36 |
+  | 37 |
+  | 38 |
+  | 39 |
+  | 40 |
+  | 41 |
+  | 42 |
+  | 43 |
+  | 44 |
+  | 45 |
+  | 46 |
+  | 47 |
+  | 48 |
+  | 49 |
+  
+  > Showing 50 of 60 rows.
+  '''
+# ---
+# name: TestFormatSnapshots.test_format_results_table_with_none
+  '''
+  | A | B |
+  | --- | --- |
+  |  | x |
+  | y |  |
+  '''
+# ---
+# name: TestFormatSnapshots.test_format_schema_basic
+  'TABLE dim_player (person_id BIGINT)'
+# ---
+# name: TestNodeSchemaSnapshots.test_error_analyzer_exec_output
+  dict({
+    'affected_entities': list([
+      'dim_player',
+    ]),
+    'error_type': 'missing_column',
+    'root_cause': "Referenced column 'foobar' does not exist in dim_player",
+    'suggested_fix_direction': 'Check the schema of dim_player and use a valid column name like person_id',
+  })
+# ---
+# name: TestNodeSchemaSnapshots.test_intent_classifier_exec_output
+  dict({
+    'intent': 'query_db',
+    'reason': 'user is asking for player statistics',
+  })
+# ---
+# name: TestNodeSchemaSnapshots.test_message_preprocessor_exec_output
+  dict({
+    'clean_message': 'Who scored the most points?',
+    'entities': dict({
+      'players': list([
+      ]),
+      'seasons': list([
+        '2023-24',
+      ]),
+      'teams': list([
+        'Lakers',
+      ]),
+    }),
+  })
+# ---
+# name: TestNodeSchemaSnapshots.test_query_planner_exec_output
+  dict({
+    'aggregations': list([
+      'AVG(points)',
+    ]),
+    'filters': list([
+      'season = 2023-24',
+    ]),
+    'plan': 'Join dim_player with fact_player_game_stats on person_id, group by player, average points',
+    'tables_used': list([
+      'dim_player',
+      'fact_player_game_stats',
+    ]),
+  })
+# ---
+# name: TestNodeSchemaSnapshots.test_sql_fixer_exec_output
+  'SELECT person_id FROM dim_player'
+# ---
+# name: TestNodeSchemaSnapshots.test_sql_generator_exec_output
+  'SELECT person_id, first_name, last_name FROM dim_player'
+# ---
+# name: TestNodeSchemaSnapshots.test_table_selector_exec_output
+  dict({
+    'reason': 'needed for player points query',
+    'tables': list([
+      'dim_player',
+      'fact_player_game_stats',
+    ]),
+  })
+# ---
+# name: TestUtilitySnapshots.test_classify_error_missing_column
+  'missing_column'
+# ---
+# name: TestUtilitySnapshots.test_classify_error_missing_table
+  'missing_table'
+# ---
+# name: TestUtilitySnapshots.test_classify_error_syntax
+  'syntax_error'
+# ---
+# name: TestUtilitySnapshots.test_classify_error_unknown
+  'unknown'
+# ---
+# name: TestUtilitySnapshots.test_optimize_sql_adds_limit
+  'SELECT * FROM dim_player LIMIT 200;'
+# ---
+# name: TestUtilitySnapshots.test_optimize_sql_preserves_limit
+  'SELECT * FROM dim_player LIMIT 5;'
+# ---
+# name: TestUtilitySnapshots.test_validate_sql_safety_drop
+  tuple(
+    False,
+    'Only SELECT statements are allowed',
+  )
+# ---
+# name: TestUtilitySnapshots.test_validate_sql_safety_empty
+  tuple(
+    False,
+    'SQL statement is empty',
+  )
+# ---
+# name: TestUtilitySnapshots.test_validate_sql_safety_insert
+  tuple(
+    False,
+    'Only SELECT statements are allowed',
+  )
+# ---
+# name: TestUtilitySnapshots.test_validate_sql_safety_select
+  tuple(
+    True,
+    'SQL is safe',
+  )
+# ---

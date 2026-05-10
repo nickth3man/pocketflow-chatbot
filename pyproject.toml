@@ -1,0 +1,125 @@
+[project]
+name = "pocketflow-chatbot"
+version = "0.1.0"
+description = "NBA Basketball Chatbot with PocketFlow, DuckDB, and Gradio"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pocketflow>=0.0.1",
+    "duckdb>=1.0",
+    "gradio>=5.0",
+    "openai>=1.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.2.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.9",
+    "ty>=0.0.18",
+    "pyright>=1.1",
+    "pytest-mock>=3.15.1",
+    "pytest-cov>=7.1.0",
+    # Tier 1
+    "pytest-socket>=0.7",
+    "pytest-randomly>=3.15",
+    "pytest-xdist>=3.6",
+    # Tier 2
+    "pytest-lazy-fixtures>=1.4",
+    "pytest-freezer>=0.4",
+    "pytest-sugar>=1.0",
+    "pytest-clarity>=1.0",
+    "pytest-check>=2.4",
+    "pytest-modified-env>=0.1",
+    "pytest-timeout>=2.3",
+    "syrupy>=4.6",
+    "pytest-deadfixtures>=3.1",
+    # Tier 3
+    "pytest-testmon>=2.2",
+    "pytest-picked>=0.5",
+    "pytest-duration-insights>=0.1",
+    "pytest-reportlog>=0.4",
+    "pytest-repeat>=0.9",
+    "pytest-monitor>=1.6",
+    "pytest-unordered>=0.6",
+    "pytest-codeblocks>=0.17",
+    "pyfakefs>=5.7",
+    "pytest-ruff>=0.5",
+    "setuptools>=82.0.1",
+]
+
+# ── uv ──────────────────────────────────────────────────────────────────────
+[tool.uv]
+package = false
+
+# ── Ruff (linter + formatter) ───────────────────────────────────────────────
+[tool.ruff]
+exclude = ["docs/"]
+line-length = 88
+target-version = "py312"
+preview = true
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # Pyflakes
+    "I",   # isort (import sorting)
+    "UP",  # pyupgrade (modernize syntax)
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "C4",  # flake8-comprehensions
+    "RUF", # Ruff-specific rules
+]
+ignore = [
+    "E501", # line too long (formatter handles this)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["utils"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+# ── ty (type checker) ───────────────────────────────────────────────────────
+[tool.ty.rules]
+all = "warn"
+
+[tool.ty.analysis]
+respect-type-ignore-comments = true
+
+[tool.ty.environment]
+python-version = "3.12"
+
+# ── Pyright (type checker) ──────────────────────────────────────────────────
+[tool.pyright]
+typeCheckingMode = "standard"
+pythonVersion = "3.12"
+reportMissingImports = "error"
+reportMissingTypeStubs = false
+reportUnusedVariable = "warning"
+
+# ── Pytest ────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--strict-config",
+    "--tb=short",
+    "--allow-hosts=openrouter.ai,127.0.0.1,localhost",
+]
+markers = [
+    "enable_socket: tests needing real network (pytest-socket)",
+    "slow: tests taking >5s (deselect with 'not slow')",
+    "live_api: tests making real OpenRouter API calls",
+    "modify_env: tests that intentionally modify os.environ (pytest-modified-env)",
+]
+filterwarnings = [
+    "error",
+    "ignore::ResourceWarning",
+]
+timeout = 120
