@@ -1,26 +1,49 @@
+import contextlib
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 
 import duckdb
 
 _EXECUTOR = ThreadPoolExecutor(max_workers=1)
+_connections: dict[str, duckdb.DuckDBPyConnection] = {}
+_connections_lock = threading.Lock()
+
+
+def _get_connection(db_path: str) -> duckdb.DuckDBPyConnection:
+    con = _connections.get(db_path)
+    if con is not None:
+        return con
+    with _connections_lock:
+        con = _connections.get(db_path)
+        if con is not None:
+            return con
+        con = duckdb.connect(db_path, read_only=True)
+        con.execute("SET memory_limit = '2GB'")
+        _connections[db_path] = con
+        return con
+
+
+def _close_connection() -> None:
+    global _connections
+    for con in _connections.values():
+        with contextlib.suppress(Exception):
+            con.close()
+    _connections = {}
 
 
 def _run_query(
     db_path: str, sql: str, max_rows: int
 ) -> tuple[list[str], list[list], float]:
     start = time.time()
-    con = duckdb.connect(db_path, read_only=True)
-    try:
-        con.execute("SET memory_limit = '2GB'")
-        result = con.execute(sql)
-        columns = [desc[0] for desc in result.description]
-        raw_rows = result.fetchmany(max_rows)
-        rows = [list(row) for row in raw_rows]
-        elapsed_ms = (time.time() - start) * 1000
-        return columns, rows, elapsed_ms
-    finally:
-        con.close()
+    con = _get_connection(db_path)
+    result = con.execute(sql)
+    columns = [desc[0] for desc in result.description]
+    raw_rows = result.fetchmany(max_rows)
+    rows = [list(row) for row in raw_rows]
+    elapsed_ms = (time.time() - start) * 1000
+    return columns, rows, elapsed_ms
 
 
 def execute_query(
@@ -41,7 +64,7 @@ def execute_query(
             "elapsed_ms": elapsed_ms,
             "error": None,
         }
-    except TimeoutError:
+    except FuturesTimeoutError:
         elapsed_ms = (time.time() - start) * 1000
         return {
             "success": False,

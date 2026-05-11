@@ -1,5 +1,11 @@
 import re
 
+_RE_DANGEROUS_KEYWORDS = re.compile(
+    r"\b(CREATE|DROP|ALTER|INSERT|UPDATE|DELETE|TRUNCATE|REPLACE|"
+    r"GRANT|REVOKE|EXEC|EXECUTE|LOAD|IMPORT|ATTACH|DETACH)\b",
+    re.IGNORECASE,
+)
+
 
 def validate_sql_safety(sql: str) -> tuple[bool, str]:
     stripped = sql.strip()
@@ -10,12 +16,7 @@ def validate_sql_safety(sql: str) -> tuple[bool, str]:
     if not stripped.upper().startswith("SELECT"):
         return False, "Only SELECT statements are allowed"
 
-    dangerous = re.findall(
-        r"\b(CREATE|DROP|ALTER|INSERT|UPDATE|DELETE|TRUNCATE|REPLACE|"
-        r"GRANT|REVOKE|EXEC|EXECUTE|LOAD|IMPORT|ATTACH|DETACH)\b",
-        stripped,
-        re.IGNORECASE,
-    )
+    dangerous = _RE_DANGEROUS_KEYWORDS.findall(stripped)
     if dangerous:
         unique = list(dict.fromkeys(dangerous))
         return (

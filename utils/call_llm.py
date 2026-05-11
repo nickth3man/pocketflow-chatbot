@@ -1,5 +1,3 @@
-from typing import Any
-
 from openai import OpenAI
 from openai.types.chat import (
     ChatCompletionMessageParam,
@@ -14,14 +12,18 @@ def call_llm(
     model: str,
     system_prompt: str = "",
 ) -> str:
-    client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
+    client = OpenAI(
+        api_key=api_key,
+        base_url="https://openrouter.ai/api/v1",
+        timeout=60.0,
+    )
     messages: list[ChatCompletionMessageParam] = []
     if system_prompt:
         messages.append(
             ChatCompletionSystemMessageParam(role="system", content=system_prompt)
         )
     messages.append(ChatCompletionUserMessageParam(role="user", content=prompt))
-    r: Any = client.chat.completions.create(model=model, messages=messages)
+    r = client.chat.completions.create(model=model, messages=messages)
     if not r.choices:
         raise ValueError("LLM returned no choices")
     content = r.choices[0].message.content

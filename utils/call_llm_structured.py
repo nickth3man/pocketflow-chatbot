@@ -4,25 +4,27 @@ import yaml
 
 from utils.call_llm import call_llm
 
+_RE_CODE_FENCE_YAML = re.compile(r"```yaml\s*\n?(.*?)```", re.DOTALL)
+_RE_CODE_FENCE_PLAIN = re.compile(r"```\s*\n?(.*?)```", re.DOTALL)
+_RE_YAML_KEY_LINE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*:")
+_RE_YAML_KV = re.compile(r"^(\s*[a-zA-Z_][a-zA-Z0-9_]*:\s*)(.*)")
+_RE_YAML_KV_ANY = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*):\s*(.*)")
+_RE_FENCE_START = re.compile(r"^```(?:yaml)?\s*")
+_RE_FENCE_END = re.compile(r"\s*```$")
+
 
 def _extract_yaml_block(text: str) -> str | None:
     stripped = text.strip()
 
-    # Try code-fenced blocks first (```yaml ... ``` or ``` ... ```)
-    for pattern in [
-        r"```yaml\s*\n?(.*?)```",
-        r"```\s*\n?(.*?)```",
-    ]:
-        match = re.search(pattern, stripped, re.DOTALL)
+    for pattern in (_RE_CODE_FENCE_YAML, _RE_CODE_FENCE_PLAIN):
+        match = pattern.search(stripped)
         if match:
-            content = match.group(1).strip()
-            return _fix_yaml_quoting(content)
+            return _fix_yaml_quoting(match.group(1).strip())
 
-    # No code fences — look for the first line that starts a YAML mapping key
     lines = stripped.split("\n")
     yaml_start = -1
     for i, line in enumerate(lines):
-        if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*:", line):
+        if _RE_YAML_KEY_LINE.match(line):
             yaml_start = i
             break
 
@@ -33,11 +35,10 @@ def _extract_yaml_block(text: str) -> str | None:
 
 
 def _fix_yaml_quoting(text: str) -> str:
-    """Naively quote unquoted YAML scalar values that contain colons."""
     lines = text.split("\n")
     fixed: list[str] = []
     for line in lines:
-        m = re.match(r"^(\s*[a-zA-Z_][a-zA-Z0-9_]*:\s*)(.*)", line)
+        m = _RE_YAML_KV.match(line)
         if m:
             prefix, value = m.group(1), m.group(2)
             if (
@@ -62,6 +63,13 @@ def _parse_yaml_safe(text: str) -> dict | None:
     return None
 
 
+def _strip_fences(text: str) -> str:
+    result = text.strip()
+    result = _RE_FENCE_START.sub("", result)
+    result = _RE_FENCE_END.sub("", result)
+    return result.strip()
+
+
 def call_llm_structured(
     prompt: str,
     api_key: str,
@@ -84,26 +92,20 @@ def call_llm_structured(
 
     response = call_llm(prompt, api_key, model, yaml_system_prompt)
 
-    # Strategy 1: try raw response directly
-    cleaned = response.strip()
-    cleaned = re.sub(r"^```(?:yaml)?\s*", "", cleaned)
-    cleaned = re.sub(r"\s*```$", "", cleaned)
-    cleaned = cleaned.strip()
-    parsed = _parse_yaml_safe(cleaned)
-    if parsed is not None:
-        _validate_required_fields(parsed, required_fields)
-        return parsed
-
-    # Strategy 2: try extracting YAML block (handles fences + leading text)
     block = _extract_yaml_block(response)
-    parsed = _parse_yaml_safe(block or cleaned)
+    parsed = _parse_yaml_safe(block) if block else None
     if parsed is not None:
         _validate_required_fields(parsed, required_fields)
         return parsed
 
-    # Strategy 3: try line-by-line recovery for common YAML issues
     rebuilt = _rebuild_yaml(response, required_fields)
     parsed = _parse_yaml_safe(rebuilt)
+    if parsed is not None:
+        _validate_required_fields(parsed, required_fields)
+        return parsed
+
+    cleaned = _strip_fences(response)
+    parsed = _parse_yaml_safe(cleaned)
     if parsed is not None:
         _validate_required_fields(parsed, required_fields)
         return parsed
@@ -114,14 +116,13 @@ def call_llm_structured(
 
 
 def _rebuild_yaml(text: str, required_fields: list[str]) -> str:
-    """Fallback: manually extract known fields from response text."""
     lines = text.split("\n")
     extracted: dict[str, str] = {}
     current_key: str | None = None
     current_value: list[str] = []
 
     for line in lines:
-        m = re.match(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*):\s*(.*)", line)
+        m = _RE_YAML_KV_ANY.match(line)
         if m:
             if current_key:
                 extracted[current_key] = "\n".join(current_value).strip()

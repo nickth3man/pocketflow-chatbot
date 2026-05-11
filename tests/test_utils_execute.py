@@ -3,7 +3,38 @@
 import duckdb
 import pytest
 
-from utils.execute_query import _run_query, execute_query
+from utils.execute_query import (
+    _close_connection,
+    _get_connection,
+    _run_query,
+    execute_query,
+)
+
+
+class TestGetConnection:
+    def test_get_connection_caches_and_reuses(self, mocker):
+        mock_con = mocker.MagicMock()
+        mock_connect = mocker.patch("duckdb.connect", return_value=mock_con)
+
+        _close_connection()
+        con1 = _get_connection("cache_test:")
+        con2 = _get_connection("cache_test:")
+
+        assert con1 is con2
+        assert mock_connect.call_count == 1
+
+    def test_get_connection_different_paths(self, mocker):
+        mock_con1 = mocker.MagicMock()
+        mock_con2 = mocker.MagicMock()
+        mock_connect = mocker.patch(
+            "duckdb.connect", side_effect=[mock_con1, mock_con2]
+        )
+
+        _close_connection()
+        _ = _get_connection("path_a:")
+        _ = _get_connection("path_b:")
+
+        assert mock_connect.call_count == 2
 
 
 class TestRunQuery:
@@ -11,32 +42,32 @@ class TestRunQuery:
         mock_con = mocker.MagicMock()
         mock_con.execute.return_value.description = [["col1"]]
         mock_con.execute.return_value.fetchmany.return_value = [[1]]
-        mocker.patch("duckdb.connect", return_value=mock_con)
+        mocker.patch("utils.execute_query._get_connection", return_value=mock_con)
         columns, rows, elapsed_ms = _run_query(":memory:", "SELECT 1", 200)
         assert columns == ["col1"]
         assert rows == [[1]]
         assert elapsed_ms >= 0
 
-    def test_run_query_sets_memory_limit(self, mocker):
+    def test_run_query_delegates_to_connection(self, mocker):
         mock_con = mocker.MagicMock()
         mock_con.execute.return_value.description = [["x"]]
         mock_con.execute.return_value.fetchmany.return_value = [["y"]]
-        mocker.patch("duckdb.connect", return_value=mock_con)
+        mocker.patch("utils.execute_query._get_connection", return_value=mock_con)
         _run_query(":memory:", "SELECT 'y'", 200)
-        mock_con.execute.assert_any_call("SET memory_limit = '2GB'")
+        mock_con.execute.assert_any_call("SELECT 'y'")
 
-    def test_run_query_closes_connection(self, mocker):
+    def test_run_query_does_not_close_connection(self, mocker):
         mock_con = mocker.MagicMock()
         mock_con.execute.return_value.description = [["x"]]
         mock_con.execute.return_value.fetchmany.return_value = [["y"]]
-        mocker.patch("duckdb.connect", return_value=mock_con)
+        mocker.patch("utils.execute_query._get_connection", return_value=mock_con)
         _run_query(":memory:", "SELECT 'y'", 200)
-        mock_con.close.assert_called_once()
+        mock_con.close.assert_not_called()
 
     def test_run_query_respects_max_rows(self, mocker):
         mock_con = mocker.MagicMock()
         mock_con.execute.return_value.description = [["x"]]
-        mocker.patch("duckdb.connect", return_value=mock_con)
+        mocker.patch("utils.execute_query._get_connection", return_value=mock_con)
         _run_query(":memory:", "SELECT 1", max_rows=10)
         mock_con.execute.return_value.fetchmany.assert_called_with(10)
 

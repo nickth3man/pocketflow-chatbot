@@ -17,11 +17,20 @@ from utils.validate_sql_safety import validate_sql_safety
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 
+_PROMPTS: dict[str, str] = {}
+for _f in PROMPTS_DIR.iterdir():
+    if _f.suffix == ".txt":
+        _PROMPTS[_f.stem] = _f.read_text(encoding="utf-8")
+
+_CHAT_HISTORY_MAX = 100
+
 _logger = logging.getLogger("nba_chatbot")
 
 
-def _load_prompt(name: str) -> str:
-    return (PROMPTS_DIR / name).read_text(encoding="utf-8")
+def _prune_chat_history(shared: dict[str, Any]) -> None:
+    history = shared.get("chat_history", [])
+    if len(history) > _CHAT_HISTORY_MAX:
+        shared["chat_history"] = history[-_CHAT_HISTORY_MAX:]
 
 
 def _log_step(
@@ -52,7 +61,7 @@ class MessagePreprocessorNode(Node):
             "user_message": shared["user_message"],
             "api_key": shared["openrouter_api_key"],
             "model": shared["openrouter_model"],
-            "system_prompt": _load_prompt("preprocess_prompt.txt"),
+            "system_prompt": _PROMPTS["preprocess_prompt"],
         }
 
     def exec(self, prep_res: dict[str, Any]) -> dict[str, Any]:
@@ -129,7 +138,7 @@ class IntentClassifierNode(Node):
             "history_context": shared.get("history_context", ""),
             "api_key": shared["openrouter_api_key"],
             "model": shared["openrouter_model"],
-            "system_prompt": _load_prompt("intent_classifier_prompt.txt"),
+            "system_prompt": _PROMPTS["intent_classifier_prompt"],
         }
 
     def exec(self, prep_res: dict[str, Any]) -> dict[str, Any]:
@@ -166,10 +175,12 @@ class IntentClassifierNode(Node):
 class TableSelectorNode(Node):
     def __init__(self) -> None:
         super().__init__(max_retries=2, wait=1)
+        self._table_listing: str | None = None
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
-        schema_by_table = shared.get("schema_by_table", {})
-        table_listing = "\n".join(f"- {name}" for name in schema_by_table)
+        schema_by_table: dict = shared.get("schema_by_table", {})  # type: ignore[no-redef]
+        if self._table_listing is None:
+            self._table_listing = "\n".join(f"- {name}" for name in schema_by_table)
         _logger.debug("[TableSelector] prep: %d tables available", len(schema_by_table))
         return {
             "clean_message": shared.get("clean_message", ""),
@@ -177,9 +188,9 @@ class TableSelectorNode(Node):
             "history_context": shared.get("history_context", ""),
             "api_key": shared["openrouter_api_key"],
             "model": shared["openrouter_model"],
-            "table_listing": table_listing,
+            "table_listing": self._table_listing,
             "schema_by_table": schema_by_table,
-            "system_prompt": _load_prompt("table_selector_prompt.txt"),
+            "system_prompt": _PROMPTS["table_selector_prompt"],
         }
 
     def exec(self, prep_res: dict[str, Any]) -> dict[str, Any]:
@@ -225,7 +236,7 @@ class QueryPlannerNode(Node):
             "history_context": shared.get("history_context", ""),
             "api_key": shared["openrouter_api_key"],
             "model": shared["openrouter_model"],
-            "system_prompt": _load_prompt("query_planner_prompt.txt"),
+            "system_prompt": _PROMPTS["query_planner_prompt"],
         }
 
     def exec(self, prep_res: dict[str, Any]) -> dict[str, Any]:
@@ -270,7 +281,7 @@ class SQLGeneratorNode(Node):
             "history_context": shared.get("history_context", ""),
             "api_key": shared["openrouter_api_key"],
             "model": shared["openrouter_model"],
-            "system_prompt": _load_prompt("sql_generator_prompt.txt"),
+            "system_prompt": _PROMPTS["sql_generator_prompt"],
             "execution_error": shared.get("execution_error"),
             "error_type": shared.get("error_type"),
             "error_analysis": shared.get("error_analysis"),
@@ -415,7 +426,7 @@ class ErrorAnalyzerNode(Node):
     def exec(self, prep_res: dict[str, Any]) -> dict[str, Any]:
         _logger.debug("[ErrorAnalyzer] exec: analyzing error...")
         prompt = f"Error: {prep_res['execution_error']}\n\nFailed SQL:\n{prep_res['generated_sql']}\n\nOriginal question:\n{prep_res['clean_message']}\n\nSchema context:\n{prep_res['schema_context']}"
-        system_prompt = _load_prompt("error_analyzer_prompt.txt").format(
+        system_prompt = _PROMPTS["error_analyzer_prompt"].format(
             error_type=prep_res["error_type"],
             sql=prep_res["generated_sql"],
             question=prep_res["clean_message"],
@@ -502,7 +513,7 @@ class SQLFixerNode(Node):
 
     def exec(self, prep_res: dict[str, Any]) -> str:
         _logger.debug("[SQLFixer] exec: fixing SQL...")
-        prompt = _load_prompt("sql_fixer_prompt.txt").format(
+        prompt = _PROMPTS["sql_fixer_prompt"].format(
             question=prep_res["clean_message"],
             sql=prep_res["generated_sql"],
             error_type=prep_res["error_type"],
@@ -626,7 +637,7 @@ class ResultAnalyzerNode(Node):
         }
 
     def exec(self, prep_res: dict[str, Any]) -> str:
-        system_prompt = _load_prompt("result_analyzer_prompt.txt")
+        system_prompt = _PROMPTS["result_analyzer_prompt"]
         if prep_res["has_results"]:
             sql_result = prep_res["sql_result"]
             table_str = format_results_table(sql_result["columns"], sql_result["rows"])
@@ -670,6 +681,11 @@ class ResultAnalyzerNode(Node):
         shared["result_analysis"] = exec_res
         pr = prep_res or {}
         has_results = pr.get("has_results", False)
+        sql_result = pr.get("sql_result")
+        if has_results and sql_result:
+            shared["formatted_results_table"] = format_results_table(
+                sql_result["columns"], sql_result["rows"]
+            )
         _log_step(
             shared, "ResultAnalyzer", f"narrative generated (has_data={has_results})"
         )
@@ -682,6 +698,7 @@ class ResponseBuilderNode(Node):
         return {
             "result_analysis": shared.get("result_analysis", ""),
             "sql_result": shared.get("sql_result"),
+            "formatted_results_table": shared.get("formatted_results_table", ""),
             "response_sql": shared.get("response_sql"),
             "debug_attempts": shared.get("debug_attempts", 0),
             "max_debug_attempts": shared.get("max_debug_attempts", 3),
@@ -691,11 +708,18 @@ class ResponseBuilderNode(Node):
         narrative = prep_res["result_analysis"]
         sql = prep_res["response_sql"]
 
-        table_md = ""
+        table_md = prep_res.get("formatted_results_table", "")
         elapsed_ms = None
         sql_result = prep_res.get("sql_result")
-        if sql_result and sql_result.get("success") and sql_result.get("rows"):
+        if (
+            not table_md
+            and sql_result
+            and sql_result.get("success")
+            and sql_result.get("rows")
+        ):
             table_md = format_results_table(sql_result["columns"], sql_result["rows"])
+            elapsed_ms = sql_result.get("elapsed_ms")
+        elif sql_result:
             elapsed_ms = sql_result.get("elapsed_ms")
 
         response = format_response_markdown(
@@ -717,6 +741,7 @@ class ResponseBuilderNode(Node):
             "error": prep_res.get("sql_result") is None
             or not prep_res["sql_result"].get("success", False),
         })
+        _prune_chat_history(shared)
         _log_step(shared, "ResponseBuilder", "final response built")
         return "default"
 
@@ -740,7 +765,7 @@ class ChatResponderNode(Node):
 
     def exec(self, prep_res: dict[str, Any]) -> str:
         _logger.debug("[ChatResponder] exec: generating chat response...")
-        system_prompt = _load_prompt("chat_responder_prompt.txt")
+        system_prompt = _PROMPTS["chat_responder_prompt"]
         clarify_instruction = ""
         if prep_res["intent"] == "clarify":
             clarify_instruction = (
@@ -772,5 +797,6 @@ class ChatResponderNode(Node):
             "sql": None,
             "error": False,
         })
+        _prune_chat_history(shared)
         _log_step(shared, "ChatResponder", "chat response generated")
         return "default"
