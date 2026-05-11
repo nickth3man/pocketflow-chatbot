@@ -118,7 +118,26 @@ class TestFormatSchema:
     def test_basic_format(self):
         schema = {"dim_player": {"columns": [{"name": "person_id", "type": "BIGINT"}]}}
         result = format_schema(schema)
-        assert "TABLE dim_player (person_id BIGINT)" in result
+        assert "TABLE dim_player" in result
+        assert "person_id BIGINT" in result
+
+    def test_sample_values_included(self):
+        schema = {
+            "fact_game": {
+                "columns": [
+                    {
+                        "name": "season_year",
+                        "type": "VARCHAR",
+                        "samples": ["2022-23", "2023-24"],
+                    }
+                ],
+                "row_count": 1000,
+            }
+        }
+        result = format_schema(schema)
+        assert "2022-23" in result
+        assert "2023-24" in result
+        assert "1,000" in result
 
 
 class TestFormatResponseMarkdown:

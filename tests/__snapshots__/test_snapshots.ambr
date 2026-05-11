@@ -101,7 +101,10 @@
   '''
 # ---
 # name: TestFormatSnapshots.test_format_schema_basic
-  'TABLE dim_player (person_id BIGINT)'
+  '''
+  TABLE dim_player (0 rows):
+    person_id BIGINT
+  '''
 # ---
 # name: TestNodeSchemaSnapshots.test_error_analyzer_exec_output
   dict({

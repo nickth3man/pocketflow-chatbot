@@ -1,6 +1,6 @@
-# pocketflow-chatbot
+# CLAUDE.md
 
-NBA Basketball Chatbot built with PocketFlow, DuckDB, and Gradio.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Commands
 

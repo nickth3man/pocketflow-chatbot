@@ -264,7 +264,7 @@ class TestAppFormatStepTrace:
         from app import _format_step_trace_html
 
         result = _format_step_trace_html([])
-        assert result == ""
+        assert "empty-state" in result
 
     @pytest.mark.modify_env()
     def test_format_step_trace_with_steps(self, mocker):
@@ -278,8 +278,8 @@ class TestAppFormatStepTrace:
         result = _format_step_trace_html(logs)
         assert "Preprocess" in result
         assert "SQLExecutor" in result
-        assert "complete" in result
-        assert "error" in result
+        assert "step-done" in result
+        assert "step-err" in result
         assert "cleaned message" in result
         assert "query failed" in result
 
@@ -314,7 +314,10 @@ class TestAppOnClear:
         # Ensure shared is initialized
         app_mod.get_shared()
         result = _on_clear()
-        assert result == ""
+        msg_out, step_out, _meta_out, chart_out = result
+        assert msg_out == ""
+        assert step_out == ""
+        assert chart_out is None
 
 
 class TestQueryPlannerPlanAsList:
