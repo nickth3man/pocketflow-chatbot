@@ -172,7 +172,10 @@ class TableSelectorNode(Node):
     def exec_fallback(self, prep_res: Any, exc: Exception) -> dict[str, Any]:
         schema_by_table = prep_res.get("schema_by_table", {}) if prep_res else {}
         all_tables = list(schema_by_table.keys())
-        return {"tables": all_tables, "reason": "fallback: using all tables due to selection error"}
+        return {
+            "tables": all_tables,
+            "reason": "fallback: using all tables due to selection error",
+        }
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
         schema_by_table = shared.get("schema_by_table", {})
@@ -220,7 +223,11 @@ class QueryPlannerNode(Node):
         super().__init__(max_retries=2, wait=1)
 
     def exec_fallback(self, prep_res: Any, exc: Exception) -> dict[str, Any]:
-        question = prep_res.get("clean_message", "the user question") if prep_res else "the user question"
+        question = (
+            prep_res.get("clean_message", "the user question")
+            if prep_res
+            else "the user question"
+        )
         return {
             "plan": f"Select all relevant columns to answer: {question}",
             "tables_used": prep_res.get("entities", {}) if prep_res else [],
@@ -432,7 +439,12 @@ class ErrorAnalyzerNode(Node):
     def post(
         self, shared: dict[str, Any], prep_res: Any, exec_res: dict[str, Any]
     ) -> str:
-        shared["error_type"] = _ensure_str(exec_res.get("error_type", prep_res.get("error_type", "unknown") if prep_res else "unknown"))
+        shared["error_type"] = _ensure_str(
+            exec_res.get(
+                "error_type",
+                prep_res.get("error_type", "unknown") if prep_res else "unknown",
+            )
+        )
         shared["error_analysis"] = exec_res
         root_cause = _ensure_str(exec_res.get("root_cause", ""))[:80]
         _log_step(
@@ -474,7 +486,11 @@ class SQLFixerNode(Node):
         super().__init__(max_retries=2, wait=1)
 
     def exec_fallback(self, prep_res: Any, exc: Exception) -> str:
-        return prep_res.get("generated_sql", "SELECT 'SQL fix failed' AS error") if prep_res else "SELECT 'SQL fix failed' AS error"
+        return (
+            prep_res.get("generated_sql", "SELECT 'SQL fix failed' AS error")
+            if prep_res
+            else "SELECT 'SQL fix failed' AS error"
+        )
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
         return {

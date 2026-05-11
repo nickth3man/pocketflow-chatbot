@@ -333,7 +333,7 @@ class TestQueryPlannerPlanAsList:
         }
         node.post(shared, None, exec_res)
         assert isinstance(shared["query_plan"], str)
-        assert shared["query_plan"] == "Step 1: join, Step 2: filter, Step 3: aggregate"
+        assert shared["query_plan"] == "Step 1: join\nStep 2: filter\nStep 3: aggregate"
 
 
 class TestMainBuildSharedPaths:

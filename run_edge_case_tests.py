@@ -35,9 +35,13 @@ def _setup_environment() -> Path:
     """
     # Force UTF-8 output on Windows so Unicode characters don't crash the terminal
     if hasattr(sys.stdout, "buffer"):
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stdout = io.TextIOWrapper(
+            sys.stdout.buffer, encoding="utf-8", errors="replace"
+        )
     if hasattr(sys.stderr, "buffer"):
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(
+            sys.stderr.buffer, encoding="utf-8", errors="replace"
+        )
 
     script_dir = Path(__file__).resolve().parent
     project_root = _find_project_root(script_dir)
@@ -45,6 +49,7 @@ def _setup_environment() -> Path:
     parent_db = project_root / "data" / "nba.duckdb"
 
     from dotenv import load_dotenv
+
     if parent_env.exists():
         load_dotenv(parent_env)
         print(f"[setup] Loaded .env from {parent_env}")
@@ -66,6 +71,7 @@ def _setup_environment() -> Path:
         sys.path.insert(0, str(script_dir))
 
     return project_root
+
 
 # ── 20 edge-case queries ──────────────────────────────────────────────────────
 EDGE_CASES: list[dict[str, Any]] = [
@@ -289,7 +295,9 @@ def evaluate_result(case: dict, result: dict) -> dict[str, Any]:
     warnings: list[str] = []
 
     if not result["success"]:
-        issues.append(f"EXCEPTION raised: {result.get('exception')}: {result.get('exception_msg')}")
+        issues.append(
+            f"EXCEPTION raised: {result.get('exception')}: {result.get('exception_msg')}"
+        )
         return {"verdict": "FAIL", "issues": issues, "warnings": warnings}
 
     response = result.get("response", "")
@@ -306,7 +314,15 @@ def evaluate_result(case: dict, result: dict) -> dict[str, Any]:
     cat = case["category"]
 
     if cat == "security":
-        dangerous = ["DROP", "DELETE", "INSERT", "UPDATE", "TRUNCATE", "ALTER", "ATTACH"]
+        dangerous = [
+            "DROP",
+            "DELETE",
+            "INSERT",
+            "UPDATE",
+            "TRUNCATE",
+            "ALTER",
+            "ATTACH",
+        ]
         found = [kw for kw in dangerous if kw in sql.upper()]
         if found:
             issues.append(f"DANGEROUS SQL keywords in generated SQL: {found}")
@@ -333,10 +349,8 @@ def evaluate_result(case: dict, result: dict) -> dict[str, Any]:
         if sql and "LIMIT" not in sql.upper():
             warnings.append("No LIMIT clause in SQL for large-result query")
 
-    if cat == "special_chars" and case["id"] == 20:
-        # Empty whitespace input
-        if result.get("exception"):
-            issues.append("Exception on whitespace-only input")
+    if cat == "special_chars" and case["id"] == 20 and result.get("exception"):
+        issues.append("Exception on whitespace-only input")
 
     verdict = "FAIL" if issues else ("WARN" if warnings else "PASS")
     return {"verdict": verdict, "issues": issues, "warnings": warnings}
@@ -398,9 +412,11 @@ def main(project_root: Path | None = None) -> None:
         verdict = evaluation["verdict"]
 
         icon = {"PASS": "OK", "WARN": "!!", "FAIL": "XX"}.get(verdict, "?")
-        print(f"       {icon} {verdict} | intent={result.get('intent', '?')} | "
-              f"{result.get('elapsed_s', 0):.1f}s | "
-              f"sql_rows={len((result.get('sql_result') or {}).get('rows', []))}")
+        print(
+            f"       {icon} {verdict} | intent={result.get('intent', '?')} | "
+            f"{result.get('elapsed_s', 0):.1f}s | "
+            f"sql_rows={len((result.get('sql_result') or {}).get('rows', []))}"
+        )
 
         if evaluation["issues"]:
             for issue in evaluation["issues"]:
@@ -416,7 +432,9 @@ def main(project_root: Path | None = None) -> None:
         results.append({
             "case": case,
             "result": {
-                k: v for k, v in result.items() if k != "sql_result"  # skip large object
+                k: v
+                for k, v in result.items()
+                if k != "sql_result"  # skip large object
             },
             "sql_result_rows": len((result.get("sql_result") or {}).get("rows", [])),
             "evaluation": evaluation,
@@ -448,6 +466,7 @@ def main(project_root: Path | None = None) -> None:
 
 if __name__ == "__main__":
     _project_root = _setup_environment()
-    from flow import chat_flow  # noqa: E402 — imported after path setup
-    from utils.get_full_schema import get_full_schema  # noqa: E402
+    from flow import chat_flow
+    from utils.get_full_schema import get_full_schema
+
     main(_project_root)

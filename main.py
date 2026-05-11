@@ -113,8 +113,10 @@ def main() -> None:
         try:
             chat_flow.run(shared)
         except Exception as e:
-            _logger.error("Flow crashed: %s", e)
-            shared["response"] = "Sorry, an unexpected error occurred. Please try rephrasing your question."
+            logger.error("Flow crashed: %s", e)
+            shared["response"] = (
+                "Sorry, an unexpected error occurred. Please try rephrasing your question."
+            )
         response = shared.get("response", "Sorry, I couldn't generate a response.")
 
         print("\n── Step Trace ──────────────────────────────")
