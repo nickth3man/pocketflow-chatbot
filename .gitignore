@@ -104,3 +104,6 @@ coverage/
 
 # pymon auto-reload marker
 .pymon
+
+# Test run artifacts (generated output, not source data)
+edge_case_results.json

@@ -138,6 +138,8 @@ def _rebuild_yaml(text: str, required_fields: list[str]) -> str:
     if any(field in extracted for field in required_fields):
         yaml_lines: list[str] = []
         for key, value in extracted.items():
+            if not isinstance(value, str):
+                value = str(value)
             if ":" in value or "#" in value or len(value) > 80:
                 escaped = value.replace("\\", "\\\\").replace('"', '\\"')
                 yaml_lines.append(f'{key}: "{escaped}"')
