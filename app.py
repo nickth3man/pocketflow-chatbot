@@ -1,9 +1,10 @@
+import logging
 import os
 import sys
-import threading
-from collections.abc import Generator
 from pathlib import Path
 from typing import Any
+
+_logger = logging.getLogger("nba_chatbot")
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -12,70 +13,44 @@ from flow import chat_flow
 from utils.get_full_schema import get_full_schema
 from utils.logging_setup import setup_logging
 
-logger = setup_logging()
+setup_logging()
 
 load_dotenv()
 
-_PROJECT_ROOT = Path(__file__).resolve().parent
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_DB_PATH = str(_PROJECT_ROOT / "test-db" / "nba.duckdb")
 
 _shared: dict[str, Any] | None = None
 
 
 def build_shared() -> dict[str, Any]:
-    logger.debug("build_shared: starting initialization")
-
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
-        logger.critical("OPENROUTER_API_KEY environment variable is not set")
         print("ERROR: OPENROUTER_API_KEY is not set.", file=sys.stderr)
         print(
             "Create a .env file with: OPENROUTER_API_KEY=sk-or-v1-...", file=sys.stderr
         )
         raise SystemExit(1)
-    logger.debug("build_shared: OPENROUTER_API_KEY loaded")
 
     model = os.environ.get("OPENROUTER_MODEL")
     if not model:
-        logger.critical("OPENROUTER_MODEL environment variable is not set")
         print("ERROR: OPENROUTER_MODEL is not set.", file=sys.stderr)
         print(
             "Create a .env file with: OPENROUTER_MODEL=openai/gpt-4o", file=sys.stderr
         )
         raise SystemExit(1)
-    logger.debug("build_shared: OPENROUTER_MODEL loaded: %s", model)
 
-    db_path_raw = os.environ.get("DUCKDB_PATH", _DEFAULT_DB_PATH)
-    db_path = (
-        str(_PROJECT_ROOT / db_path_raw)
-        if not os.path.isabs(db_path_raw)
-        else db_path_raw
-    )
-    logger.debug("build_shared: resolved db_path=%s", db_path)
+    db_path = os.environ.get("DUCKDB_PATH", _DEFAULT_DB_PATH)
     db_query_timeout = int(os.environ.get("DB_QUERY_TIMEOUT", "30"))
 
     if not os.path.isfile(db_path):
-        logger.critical("Database file not found at: %s", db_path)
         print(f"ERROR: Database not found at: {db_path}", file=sys.stderr)
         print(
             "Set DUCKDB_PATH in .env to point to your nba.duckdb file.", file=sys.stderr
         )
         raise SystemExit(1)
-    logger.info("Database found: %s", db_path)
 
-    logger.debug("build_shared: loading schema...")
     schema_by_table = get_full_schema(db_path)
-    logger.info(
-        "Schema loaded: %d tables",
-        len(schema_by_table),
-    )
-    for tname, info in schema_by_table.items():
-        logger.debug(
-            "  table=%s cols=%d rows=%d",
-            tname,
-            len(info.get("columns", [])),
-            info.get("row_count", 0),
-        )
 
     return {
         "db_path": db_path,
@@ -128,15 +103,13 @@ def _format_step_trace_html(step_logs: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def reset_conversation() -> None:
-    global _shared
-    _shared = None
-
-
-def handle_submit(
-    message: str, history: list[dict]
-) -> Generator[tuple[str, list[dict], str], None, None]:
+def respond(message: str) -> None:
     shared = get_shared()
+    message = message.strip()
+    if not message:
+        shared["response"] = "Please enter a question about NBA basketball."
+        shared["step_logs"] = []
+        return
     shared["user_message"] = message
     shared["step_logs"] = []
     shared["chat_history"].append({
@@ -145,48 +118,17 @@ def handle_submit(
         "sql": None,
         "error": False,
     })
-    history.append({"role": "user", "content": message})
+    try:
+        chat_flow.run(shared)
+    except Exception:
+        _logger.exception("Unhandled error in respond() while running chat_flow")
+        shared["response"] = "Sorry, an unexpected error occurred. Please try again."
+        shared["step_logs"] = shared.get("step_logs", [])
 
-    flow_done = threading.Event()
-    flow_exc: list[Exception | None] = [None]
 
-    def run_flow() -> None:
-        try:
-            chat_flow.run(shared)
-        except Exception as e:
-            flow_exc[0] = e
-        finally:
-            flow_done.set()
-
-    thread = threading.Thread(target=run_flow, daemon=True)
-    thread.start()
-
-    last_log_count = 0
-    while not flow_done.is_set():
-        thread.join(timeout=0.3)
-        step_logs = shared.get("step_logs", [])
-        if len(step_logs) > last_log_count:
-            last_log_count = len(step_logs)
-            step_html = _format_step_trace_html(step_logs)
-            yield "", history, step_html
-
-    if flow_exc[0] is not None:
-        logger.error("Flow execution failed: %s", flow_exc[0])
-        history.append({
-            "role": "assistant",
-            "content": f"Sorry, an error occurred: {flow_exc[0]}",
-        })
-        step_html = _format_step_trace_html(shared.get("step_logs", []))
-        yield "", history, step_html
-        return
-
-    step_logs = shared.get("step_logs", [])
-    history.append({
-        "role": "assistant",
-        "content": shared.get("response", "Sorry, I couldn't generate a response."),
-    })
-    step_html = _format_step_trace_html(step_logs)
-    yield "", history, step_html
+def reset_conversation() -> None:
+    global _shared
+    _shared = None
 
 
 with gr.Blocks(title="NBA Basketball Chatbot") as demo:
@@ -204,7 +146,24 @@ with gr.Blocks(title="NBA Basketball Chatbot") as demo:
     )
     clear = gr.ClearButton([msg, chatbot])
 
-    msg.submit(handle_submit, [msg, chatbot], [msg, chatbot, step_trace])
+    def handle_submit(
+        message: str, history: list[dict], current_trace: str
+    ) -> tuple[str, list[dict], str]:
+        clean = message.strip()
+        if not clean:
+            return "", history, current_trace
+        respond(clean)
+        history.append({"role": "user", "content": clean})
+        history.append({
+            "role": "assistant",
+            "content": get_shared().get(
+                "response", "Sorry, I couldn't generate a response."
+            ),
+        })
+        step_html = _format_step_trace_html(get_shared().get("step_logs", []))
+        return "", history, step_html
+
+    msg.submit(handle_submit, [msg, chatbot, step_trace], [msg, chatbot, step_trace])
 
     def _on_clear() -> str:
         reset_conversation()
