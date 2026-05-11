@@ -1,7 +1,10 @@
+import logging
 import os
 import sys
 from pathlib import Path
 from typing import Any
+
+_logger = logging.getLogger("nba_chatbot")
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -118,8 +121,9 @@ def respond(message: str) -> None:
     try:
         chat_flow.run(shared)
     except Exception:
-        shared.setdefault("response", "Sorry, an unexpected error occurred. Please try again.")
-        shared.setdefault("step_logs", [])
+        _logger.exception("Unhandled error in respond() while running chat_flow")
+        shared["response"] = "Sorry, an unexpected error occurred. Please try again."
+        shared["step_logs"] = shared.get("step_logs", [])
 
 
 def reset_conversation() -> None:
@@ -142,9 +146,14 @@ with gr.Blocks(title="NBA Basketball Chatbot") as demo:
     )
     clear = gr.ClearButton([msg, chatbot])
 
-    def handle_submit(message: str, history: list[dict]) -> tuple[str, list[dict], str]:
-        respond(message)
-        history.append({"role": "user", "content": message})
+    def handle_submit(
+        message: str, history: list[dict], current_trace: str
+    ) -> tuple[str, list[dict], str]:
+        clean = message.strip()
+        if not clean:
+            return "", history, current_trace
+        respond(clean)
+        history.append({"role": "user", "content": clean})
         history.append({
             "role": "assistant",
             "content": get_shared().get(
@@ -154,7 +163,7 @@ with gr.Blocks(title="NBA Basketball Chatbot") as demo:
         step_html = _format_step_trace_html(get_shared().get("step_logs", []))
         return "", history, step_html
 
-    msg.submit(handle_submit, [msg, chatbot], [msg, chatbot, step_trace])
+    msg.submit(handle_submit, [msg, chatbot, step_trace], [msg, chatbot, step_trace])
 
     def _on_clear() -> str:
         reset_conversation()

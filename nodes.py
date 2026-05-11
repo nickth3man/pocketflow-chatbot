@@ -178,7 +178,7 @@ class TableSelectorNode(Node):
         self._table_listing: str | None = None
 
     def exec_fallback(self, prep_res: Any, exc: Exception) -> dict[str, Any]:
-        schema_by_table = prep_res.get("schema_by_table", {})
+        schema_by_table = prep_res.get("schema_by_table", {}) if prep_res else {}
         all_tables = list(schema_by_table.keys())
         return {"tables": all_tables, "reason": "fallback: using all tables due to selection error"}
 
