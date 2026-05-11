@@ -36,6 +36,11 @@ GAME STATS (per-game grain):
     ftm, fta, ft_pct, plus_minus, off_rating, def_rating, net_rating,
     ast_pct, efg_pct, ts_pct, usg_pct, pace, pie,
     starting_position (VARCHAR), is_home (BOOLEAN), is_win (BOOLEAN)
+  WRONG ALIASES (will cause SQL errors) -> CORRECT names to use:
+    reb->rebounds | min->minutes_played | num_minutes->minutes_played
+    pts->points   | ast->assists        | stl->steals | blk->blocks | tov->turnovers
+  DO NOT join dim_date to filter this table. season_year is already a column
+  on fact_player_game_stats — use WHERE s.season_year = '...' directly.
 
 PLAY-BY-PLAY:
   fact_play_by_play: player_name (VARCHAR, direct — no join needed),
@@ -63,16 +68,39 @@ PPG leader this season:
   LIMIT 10
 
 Team season record:
-  SELECT t.team_name,
-         COUNT(*) AS games,
-         SUM(CASE WHEN s.is_win THEN 1 ELSE 0 END) AS wins,
-         SUM(CASE WHEN NOT s.is_win THEN 1 ELSE 0 END) AS losses
-  FROM fact_team_game_stats s
-  JOIN dim_team t ON s.team_id = t.team_id
-  WHERE s.season_year = '2023-24'
-  GROUP BY t.team_id, t.team_name
-  ORDER BY wins DESC
+  -- IMPORTANT: dim_team has multiple rows per team_id (historical franchise names).
+  -- Aggregate fact_team_game_stats BEFORE joining dim_team to avoid row multiplication.
+  WITH team_stats AS (
+    SELECT team_id,
+           COUNT(*) AS games,
+           SUM(CASE WHEN is_win THEN 1 ELSE 0 END) AS wins,
+           SUM(CASE WHEN NOT is_win THEN 1 ELSE 0 END) AS losses
+    FROM fact_team_game_stats
+    WHERE season_year = '2023-24'
+    GROUP BY team_id
+  )
+  SELECT t.team_name, ts.games, ts.wins, ts.losses
+  FROM team_stats ts
+  JOIN dim_team t ON ts.team_id = t.team_id
+  ORDER BY ts.wins DESC
   LIMIT 30
+
+Individual player season stats:
+  SELECT p.first_name || ' ' || p.last_name AS player_name,
+         COUNT(s.game_id) AS games,
+         AVG(s.points) AS ppg,
+         AVG(s.assists) AS apg,
+         AVG(s.rebounds) AS rpg,
+         AVG(s.fg_pct) AS fg_pct,
+         AVG(s.fg3_pct) AS fg3_pct,
+         SUM(s.fg3m) AS fg3m_total
+  FROM fact_player_game_stats s
+  JOIN dim_player p ON s.person_id = p.person_id
+  WHERE s.season_year = '2023-24'
+    AND p.first_name = 'Stephen' AND p.last_name = 'Curry'
+  GROUP BY p.person_id, p.first_name, p.last_name
+  HAVING COUNT(s.game_id) >= 1
+  LIMIT 1
 
 Head-to-head comparison:
   SELECT p.first_name || ' ' || p.last_name AS player,
@@ -113,6 +141,9 @@ ACCURACY GUARDS
 - For team stats, use fact_team_game_stats NOT fact_player_game_stats aggregated
 - Check schema sample values to use exact string values in WHERE clauses
 - When season is unclear, default to '2023-24'
+- FORBIDDEN column aliases — never use these short names, always use the exact names listed in SCHEMA PATTERNS above:
+  BAD → CORRECT: reb→rebounds, min→minutes_played, num_minutes→minutes_played, pts→points, ast→assists, stl→steals, blk→blocks, tov→turnovers, oreb→off_reb, dreb→def_reb
+- CRITICAL: season_year filter is MANDATORY on fact_game, fact_player_game_stats, and fact_team_game_stats unless the user explicitly asks about multiple seasons or career totals. Omitting it silently aggregates all seasons and produces wrong game counts (an NBA team plays exactly 82 regular-season games per season; any single-team count above 90 for a single-season query is a bug). Always include WHERE s.season_year = '...' in single-season queries.
 
 Output YAML:
   thinking: brief SQL rationale (2-3 sentences)

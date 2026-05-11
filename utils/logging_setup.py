@@ -1,11 +1,12 @@
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 
 _LOGGING_CONFIGURED = False
 
 
-def setup_logging() -> logging.Logger:
+def setup_logging(prefix: str = "run") -> logging.Logger:
     global _LOGGING_CONFIGURED
     logger = logging.getLogger("nba_chatbot")
 
@@ -27,9 +28,9 @@ def setup_logging() -> logging.Logger:
 
     log_dir = Path(__file__).resolve().parent.parent / "logs"
     log_dir.mkdir(exist_ok=True)
-    file_handler = logging.FileHandler(
-        str(log_dir / "nba_chatbot.log"), mode="a", encoding="utf-8"
-    )
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"{prefix}_{timestamp}.log"
+    file_handler = logging.FileHandler(str(log_file), mode="w", encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(
         logging.Formatter(

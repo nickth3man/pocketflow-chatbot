@@ -12,7 +12,7 @@ from flow import chat_flow
 from utils.get_full_schema import get_full_schema
 from utils.logging_setup import setup_logging
 
-logger = setup_logging()
+logger = setup_logging(prefix="app")
 
 load_dotenv()
 

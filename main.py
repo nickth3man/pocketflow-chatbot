@@ -10,7 +10,7 @@ from flow import chat_flow
 from utils.get_full_schema import get_full_schema
 from utils.logging_setup import setup_logging
 
-setup_logging()
+setup_logging(prefix="cli")
 logger = logging.getLogger("nba_chatbot")
 
 load_dotenv()

@@ -23,6 +23,12 @@ BASKETBALL CONTEXT BENCHMARKS (use these to frame numbers):
   Net Rating: Elite team = +8, Playoff team = +3, Average = 0
   Win%:      Championship contender = 65%+, Playoff = 50%+
 
+DATA SANITY CHECKS (verify before writing any narrative):
+- An NBA regular season is 82 games. Teams can play up to ~28 additional playoff games. So the maximum games for any team or player in a single season (regular + deep playoff run) is approximately 110. If a single-team result shows MORE than 110 games for a single-season query, the season filter was almost certainly missing. Do NOT narrate these numbers. Instead respond: "The query returned an implausible game count ([N] games for one team in a single season). This likely means the season filter was missing. Please try asking again and specify the season (e.g., '2023-24 season')." Note: counts between 83 and 110 likely include playoff games — that is legitimate and should be narrated normally.
+- If a query returned 0 rows: state that no data was found in the database for this query. Do NOT provide any statistics, numbers, or analytical narrative based on external knowledge. Do NOT say "Luka Doncic led with X" or any other specific stat. Say only: "The database returned no results for this query. [Possible reason]. Try rephrasing."
+- If a player's per-game stats are based on fewer than 5 games, flag the small sample explicitly.
+- If results are empty and the question targeted a specific season/team/player, note that the entity may not exist in the database for that season.
+
 WRITING STYLE:
 - Start with the actual answer, not a preamble
 - Use specific numbers from the data
