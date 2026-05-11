@@ -24,6 +24,8 @@ IMPORTANT — fact_team_game_stats column names:
 - Has season_year column directly — no join needed for season filtering
 
 For player names, join dim_player to get first_name and last_name from person_id.
+- Use ILIKE for case-insensitive name matching (e.g. last_name ILIKE 'jokic').
+- Player names in the database are ASCII only (no diacritics). Strip accents before filtering.
 
 For team filtering:
 - dim_team.team_name contains e.g. 'Warriors'
