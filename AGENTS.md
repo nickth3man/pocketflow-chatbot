@@ -118,6 +118,7 @@ All node state flows through a single `shared: dict[str, Any]`. Key fields:
 - `intent` — `"query_db"`, `"chat"`, or `"clarify"`
 - `schema_by_table`, `schema_context` — DuckDB schema loaded at startup
 - `generated_sql`, `sql_result` — SQL and execution results
+- `debug_attempts`, `max_debug_attempts` — error-recovery counters, reset to `0`/`3` by `MessagePreprocessorNode` at the start of every turn
 - `response` — final markdown string rendered in the UI
 - `step_logs` — list of `{node, status, summary}` dicts shown in the sidebar
 - `chat_history` — running message list (pruned to 100 entries)
@@ -128,7 +129,7 @@ All LLM calls go through OpenRouter via the `openai` SDK (`utils/call_llm.py`, `
 
 ### Prompts
 
-Every node that calls an LLM loads its system prompt from `prompts/<name>.txt` at module import time (`nodes.py` reads the entire `prompts/` directory into `_PROMPTS`). Edit prompt files to change model behaviour without touching node code.
+Every node that calls an LLM loads its system prompt from `prompts/<name>.txt` on demand via `_load_prompt(name)`. Edit prompt files to change model behaviour without touching node code.
 
 ### Entry points
 
@@ -146,7 +147,7 @@ Every node that calls an LLM loads its system prompt from `prompts/<name>.txt` a
 | `format_schema.py` | Formats schema dict for prompt injection |
 | `get_schema_subset.py` | Filters schema to selected tables |
 | `validate_sql_safety.py` | Rejects non-SELECT or destructive SQL |
-| `optimize_sql.py` | Light SQL cleanup before execution |
+| `optimize_sql.py` | Appends `LIMIT 200` if absent and adds trailing semicolon |
 | `classify_error.py` | Categorises DuckDB error strings |
 | `format_results_table.py` | Markdown table from query results |
 | `format_response_markdown.py` | Assembles final response with SQL collapsible |
@@ -159,6 +160,9 @@ Most tests mock LLM calls and the database. Network is blocked by `pytest-socket
 
 ## Conventions
 
+- Each `Node` subclass declares a `NODE_LABEL: str` class attribute that drives the `step_logs` display name and all `_log_step` calls inside that class. Keep it short (one word or PascalCase) — it appears in the UI sidebar. Never pass a raw string literal to `_log_step` as the node name; always use `self.NODE_LABEL`.
+- `SQLGeneratorNode` validates SQL safety twice: in the `exec` stage on the raw LLM output (enables retry via `max_retries`), and in the `post` stage after `optimize_sql` (belt-and-suspenders on the final SQL). `optimize_sql` only adds `LIMIT`/semicolon so this second check should never fire, but it guards against future changes to that function.
+- Assistant turns are appended to `chat_history` via the `_append_assistant_turn` helper (`nodes.py`). Both `ResponseBuilderNode` and `ChatResponderNode` use this helper — do not open-code the dict append in new paths.
 - **ruff** handles both linting and formatting — don't use other formatters
 - **ty** for fast type-check during development, **pyright** for comprehensive checks
 - Type annotations required on all function signatures

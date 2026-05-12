@@ -2,8 +2,44 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 _LOGGING_CONFIGURED = False
+
+
+class DurationFormatter(logging.Formatter):
+    """Formatter that appends structured duration info when available."""
+
+    def _get_attr(self, record: logging.LogRecord, name: str) -> Any:
+        val = getattr(record, name, None)
+        if val is not None:
+            return val
+        extra = getattr(record, "extra", None)
+        if isinstance(extra, dict):
+            return extra.get(name)
+        return None
+
+    def format(self, record: logging.LogRecord) -> str:
+        base = super().format(record)
+        parts: list[str] = [base]
+
+        dur = self._get_attr(record, "duration_ms")
+        if dur is not None:
+            parts.append(f"⏱{dur}ms")
+
+        token_count = self._get_attr(record, "llm_total_tokens")
+        if token_count is not None:
+            parts.append(f"tok={token_count}")
+
+        row_count = self._get_attr(record, "db_row_count")
+        if row_count is not None:
+            parts.append(f"rows={row_count}")
+
+        success = self._get_attr(record, "success")
+        if success is not None:
+            parts.append("✓" if success else "✗")
+
+        return " | ".join(parts)
 
 
 def setup_logging(prefix: str = "run") -> logging.Logger:
@@ -19,7 +55,7 @@ def setup_logging(prefix: str = "run") -> logging.Logger:
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(logging.INFO)
     console.setFormatter(
-        logging.Formatter(
+        DurationFormatter(
             "[%(asctime)s] %(levelname)-5s %(name)s - %(message)s",
             datefmt="%H:%M:%S",
         )
@@ -33,7 +69,7 @@ def setup_logging(prefix: str = "run") -> logging.Logger:
     file_handler = logging.FileHandler(str(log_file), mode="w", encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(
-        logging.Formatter(
+        DurationFormatter(
             "[%(asctime)s] %(levelname)-5s %(name)s - %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )

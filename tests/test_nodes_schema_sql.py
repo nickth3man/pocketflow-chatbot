@@ -186,7 +186,8 @@ class TestSQLGeneratorNode:
     def test_exec_fallback_returns_safe_sql(self):
         node = SQLGeneratorNode()
         result = node.exec_fallback(None, ValueError("failed"))
-        assert "SQL generation failed after retries" in result
+        assert "generation failed" in result
+        assert "AS error" in result
 
     def test_post_optimizes_and_writes_sql(self, shared):
         node = SQLGeneratorNode()

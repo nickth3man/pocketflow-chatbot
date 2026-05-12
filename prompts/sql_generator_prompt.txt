@@ -19,9 +19,13 @@ PLAYER LOOKUP:
   → Join to stats via person_id
 
 TEAM LOOKUP:
-  dim_team: team_id, team_city, team_name, team_abbrev
+  dim_team: team_id (COMPOSITE KEY with season_founded — many rows per team!)
   → team_name = 'Warriors' (NOT 'Golden State Warriors')
   → team_abbrev = 'GSW', 'LAL', 'BOS', 'MIA', 'CHI', etc.
+  → WARNING: dim_team has PRIMARY KEY (team_id, season_founded).
+    Joining ON team_id alone creates CROSS PRODUCT → inflated counts + NULL season_year.
+    PREFER v_team_current (1 row per team) for name lookups.
+    For team win stats, use fact_team_game_stats.is_win (cleaner than fact_game.winner_team_id).
 
 SEASON FILTERING:
   season_year column uses format '2023-24' (NOT 2023, NOT '2023')
@@ -31,16 +35,19 @@ SEASON FILTERING:
 
 GAME STATS (per-game grain):
   fact_player_game_stats: game_id, person_id, team_id, opponent_team_id,
-    season_year, game_date, points, assists, rebounds, steals, blocks,
-    turnovers, minutes_played, fgm, fga, fg_pct, fg3m, fg3a, fg3_pct,
-    ftm, fta, ft_pct, plus_minus, off_rating, def_rating, net_rating,
-    ast_pct, efg_pct, ts_pct, usg_pct, pace, pie,
-    starting_position (VARCHAR), is_home (BOOLEAN), is_win (BOOLEAN)
-  WRONG ALIASES (will cause SQL errors) -> CORRECT names to use:
-    reb->rebounds | min->minutes_played | num_minutes->minutes_played
-    pts->points   | ast->assists        | stl->steals | blk->blocks | tov->turnovers
-  DO NOT join dim_date to filter this table. season_year is already a column
-  on fact_player_game_stats — use WHERE s.season_year = '...' directly.
+    is_home (BOOLEAN), is_win (BOOLEAN), starting_position (VARCHAR),
+    comment (VARCHAR), num_minutes (DOUBLE),
+    points, assists, blocks, steals, turnovers,
+    fga, fgm, fg_pct, fg3a, fg3m, fg3_pct, fta, ftm, ft_pct,
+    oreb, dreb, reb, fouls_personal, plus_minus,
+    off_rating, def_rating, net_rating,
+    ast_pct, ast_to_turnover_ratio, ast_ratio,
+    oreb_pct, dreb_pct, reb_pct, tov_pct,
+    efg_pct, ts_pct, usg_pct, pace, pie
+  -> season_year is NOT a column on this table. To filter by season, JOIN
+     fact_game g ON s.game_id = g.game_id and use g.season_year.
+  -> When the user asks for career/aggregate stats without specifying a
+     season, OMIT the season filter — do NOT default to '2023-24'.
 
 PLAY-BY-PLAY:
   fact_play_by_play: player_name (VARCHAR, direct — no join needed),
@@ -61,7 +68,8 @@ PPG leader this season:
          COUNT(s.game_id) AS games
   FROM fact_player_game_stats s
   JOIN dim_player p ON s.person_id = p.person_id
-  WHERE s.season_year = '2023-24'
+  JOIN fact_game g ON s.game_id = g.game_id
+  WHERE g.season_year = '2023-24'
   GROUP BY p.person_id, p.first_name, p.last_name
   HAVING COUNT(s.game_id) >= 10
   ORDER BY ppg DESC
@@ -70,6 +78,7 @@ PPG leader this season:
 Team season record:
   -- IMPORTANT: dim_team has multiple rows per team_id (historical franchise names).
   -- Aggregate fact_team_game_stats BEFORE joining dim_team to avoid row multiplication.
+  -- PREFER using v_team_current for single-row-per-team name lookups.
   WITH team_stats AS (
     SELECT team_id,
            COUNT(*) AS games,
@@ -81,7 +90,7 @@ Team season record:
   )
   SELECT t.team_name, ts.games, ts.wins, ts.losses
   FROM team_stats ts
-  JOIN dim_team t ON ts.team_id = t.team_id
+  JOIN v_team_current t ON ts.team_id = t.team_id
   ORDER BY ts.wins DESC
   LIMIT 30
 
@@ -142,8 +151,12 @@ ACCURACY GUARDS
 - Check schema sample values to use exact string values in WHERE clauses
 - When season is unclear, default to '2023-24'
 - FORBIDDEN column aliases — never use these short names, always use the exact names listed in SCHEMA PATTERNS above:
-  BAD → CORRECT: reb→rebounds, min→minutes_played, num_minutes→minutes_played, pts→points, ast→assists, stl→steals, blk→blocks, tov→turnovers, oreb→off_reb, dreb→def_reb
-- CRITICAL: season_year filter is MANDATORY on fact_game, fact_player_game_stats, and fact_team_game_stats unless the user explicitly asks about multiple seasons or career totals. Omitting it silently aggregates all seasons and produces wrong game counts (an NBA team plays exactly 82 regular-season games per season; any single-team count above 90 for a single-season query is a bug). Always include WHERE s.season_year = '...' in single-season queries.
+  BAD → CORRECT: reb→rebounds (but the column IS named 'reb' — use 'reb') | num_minutes→minutes (correct) | pts→points (use 'points')
+- CRITICAL: season_year filter is MANDATORY on fact_game, fact_player_game_stats, and fact_team_game_stats UNLESS:
+    (a) The user asks about an all-time record ("most points in a game ever", "highest career avg")
+    (b) The user explicitly says "career" or "all-time"
+    (c) Multiple seasons are requested
+  Omitting the filter on single-season queries silently aggregates all seasons and produces wrong game counts (an NBA team plays exactly 82 regular-season games per season; any single-team count above 90 for a single-season query is a bug). Always include WHERE s.season_year = '...' in single-season queries.
 
 Output YAML:
   thinking: brief SQL rationale (2-3 sentences)
