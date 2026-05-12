@@ -90,25 +90,30 @@ The main flow (`flow.py → create_chat_flow()`) is wired as a DAG:
 ```
 MessagePreprocessor → HistoryContextBuilder → IntentClassifier
                                                       │
-                            ┌─── "chat"/"clarify" ───►│──► ChatResponder
+                            ├─── "chat"/"clarify" ───►│──► ChatResponder
                             │
                             └─── "query_db" ──────────►│
                                                         │
                                               TableSelector → QueryPlanner → SQLGenerator
                                                                                     │
-                                                                             SQLExecutor
-                                                                           ┌──┤ "success"
-                                                                           │  └──► ResultAnalyzer → ResponseBuilder
-                                                                           │
-                                                                           └──── "error"
-                                                                                 │
-                                                                    ErrorRecoveryFlow (nested):
-                                                                    ErrorAnalyzer → SchemaRecheck
-                                                                    → SQLFixer → FixValidator
-                                                                    → RecoveryDecision
-                                                                         │
-                                                                    "retry" ──► SQLGenerator (loop)
-                                                                    "give_up" ─► ResultAnalyzer
+                                                                             SQLValidator
+                                                                               ├──┤ "default"
+                                                                               │  └──► SQLExecutor
+                                                                               │        ├──┤ "success"
+                                                                               │        │  └──► ResultAnalyzer → ResponseBuilder
+                                                                               │        │
+                                                                               │        └──── "error"
+                                                                               │             │
+                                                                               │    ErrorRecoveryFlow (nested):
+                                                                               │    ErrorAnalyzer → SchemaRecheck
+                                                                               │    → SQLFixer → FixValidator
+                                                                               │    → RecoveryDecision
+                                                                               │         │
+                                                                               │    "retry" ──► SQLExecutor (re-execute fixed SQL)
+                                                                               │    "give_up" ─► ResultAnalyzer
+                                                                               │
+                                                                               └──┤ "error"
+                                                                                  └──► ErrorRecoveryFlow
 ```
 
 ### Shared dict
@@ -129,7 +134,7 @@ All LLM calls go through OpenRouter via the `openai` SDK (`utils/call_llm.py`, `
 
 ### Prompts
 
-Every node that calls an LLM loads its system prompt from `prompts/<name>.txt` on demand via `_load_prompt(name)`. Edit prompt files to change model behaviour without touching node code.
+Every node that calls an LLM loads its system prompt from `prompts/<name>.txt` on demand via `get_prompt_cached(name)`. Edit prompt files to change model behaviour without touching node code.
 
 ### Entry points
 

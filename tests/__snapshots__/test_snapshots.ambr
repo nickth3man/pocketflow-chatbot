@@ -188,7 +188,7 @@
 # name: TestUtilitySnapshots.test_validate_sql_safety_drop
   tuple(
     False,
-    'Only SELECT statements are allowed',
+    'Only SELECT and WITH statements are allowed',
   )
 # ---
 # name: TestUtilitySnapshots.test_validate_sql_safety_empty
@@ -200,7 +200,7 @@
 # name: TestUtilitySnapshots.test_validate_sql_safety_insert
   tuple(
     False,
-    'Only SELECT statements are allowed',
+    'Only SELECT and WITH statements are allowed',
   )
 # ---
 # name: TestUtilitySnapshots.test_validate_sql_safety_select

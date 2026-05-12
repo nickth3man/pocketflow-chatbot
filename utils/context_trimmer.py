@@ -32,9 +32,7 @@ def trim_chat_history(
     return trimmed
 
 
-def trim_schema_context(
-    schema_text: str, max_chars: int = 3000
-) -> str:
+def trim_schema_context(schema_text: str, max_chars: int = 3000) -> str:
     if not schema_text or len(schema_text) <= max_chars:
         return schema_text
     lines = schema_text.split("\n")

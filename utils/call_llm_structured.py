@@ -23,7 +23,9 @@ def _extract_yaml_block(text: str) -> str | None:
         match = pattern.search(stripped)
         if match:
             block = match.group(1).strip()
-            _logger.debug("[YAML] extracted via code-fence pattern: %d chars", len(block))
+            _logger.debug(
+                "[YAML] extracted via code-fence pattern: %d chars", len(block)
+            )
             return _fix_yaml_quoting(block)
 
     lines = stripped.split("\n")
@@ -35,10 +37,15 @@ def _extract_yaml_block(text: str) -> str | None:
 
     if yaml_start > 0:
         block = "\n".join(lines[yaml_start:])
-        _logger.debug("[YAML] extracted via key-line detection (skipped %d preamble lines)", yaml_start)
+        _logger.debug(
+            "[YAML] extracted via key-line detection (skipped %d preamble lines)",
+            yaml_start,
+        )
         return _fix_yaml_quoting(block)
 
-    _logger.debug("[YAML] no fence or preamble found — treating entire response as YAML")
+    _logger.debug(
+        "[YAML] no fence or preamble found — treating entire response as YAML"
+    )
     return _fix_yaml_quoting(stripped)
 
 
@@ -70,7 +77,9 @@ def _parse_yaml_safe(text: str) -> dict | None:
         parsed = yaml.safe_load(text)
         if isinstance(parsed, dict):
             return parsed
-        _logger.debug("[YAML] parsed result is not a dict (type=%s)", type(parsed).__name__)
+        _logger.debug(
+            "[YAML] parsed result is not a dict (type=%s)", type(parsed).__name__
+        )
     except yaml.YAMLError as e:
         _logger.debug("[YAML] safe-load failed: %s", str(e)[:100])
     return None
@@ -88,7 +97,7 @@ def _find_field_values(text: str, required_fields: list[str]) -> dict[str, str]:
     result: dict[str, str] = {}
     for field in required_fields:
         pattern = re.compile(
-            rf'(?:^|\n)\s*{re.escape(field)}\s*:\s*(.*?)(?:\n(?:[a-zA-Z_]|\s*$)|\Z)',
+            rf"(?:^|\n)\s*{re.escape(field)}\s*:\s*(.*?)(?:\n(?:[a-zA-Z_]|\s*$)|\Z)",
             re.DOTALL,
         )
         match = pattern.search(text)
@@ -123,7 +132,9 @@ def call_llm_structured(
     block = _extract_yaml_block(response)
     parsed = _parse_yaml_safe(block) if block else None
     if parsed is not None:
-        _logger.debug("[YAML] parse success — direct path, fields=%s", list(parsed.keys()))
+        _logger.debug(
+            "[YAML] parse success — direct path, fields=%s", list(parsed.keys())
+        )
         _validate_required_fields(parsed, required_fields)
         return parsed
 
@@ -131,7 +142,9 @@ def call_llm_structured(
     rebuilt = _rebuild_yaml(response, required_fields)
     parsed = _parse_yaml_safe(rebuilt)
     if parsed is not None:
-        _logger.debug("[YAML] parse success — rebuild path, fields=%s", list(parsed.keys()))
+        _logger.debug(
+            "[YAML] parse success — rebuild path, fields=%s", list(parsed.keys())
+        )
         _validate_required_fields(parsed, required_fields)
         return parsed
 
@@ -139,14 +152,21 @@ def call_llm_structured(
     cleaned = _strip_fences(response)
     parsed = _parse_yaml_safe(cleaned)
     if parsed is not None:
-        _logger.debug("[YAML] parse success — strip-fences path, fields=%s", list(parsed.keys()))
+        _logger.debug(
+            "[YAML] parse success — strip-fences path, fields=%s", list(parsed.keys())
+        )
         _validate_required_fields(parsed, required_fields)
         return parsed
 
-    _logger.info("[YAML] strip-fences failed — attempting regex field-extraction fallback...")
+    _logger.info(
+        "[YAML] strip-fences failed — attempting regex field-extraction fallback..."
+    )
     extracted = _find_field_values(response, required_fields)
     if extracted:
-        _logger.debug("[YAML] parse success — regex extraction path, fields=%s", list(extracted.keys()))
+        _logger.debug(
+            "[YAML] parse success — regex extraction path, fields=%s",
+            list(extracted.keys()),
+        )
         return extracted
 
     raise ValueError(
@@ -193,4 +213,6 @@ def _rebuild_yaml(text: str, required_fields: list[str]) -> str:
 def _validate_required_fields(parsed: dict, required_fields: list[str]) -> None:
     missing = [f for f in required_fields if f not in parsed]
     if missing:
-        raise ValueError(f"Required fields {missing} missing from LLM response; have {list(parsed.keys())}")
+        raise ValueError(
+            f"Required fields {missing} missing from LLM response; have {list(parsed.keys())}"
+        )

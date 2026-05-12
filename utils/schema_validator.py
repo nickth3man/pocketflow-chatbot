@@ -11,9 +11,7 @@ _RE_SENTINEL = re.compile(r"__nonexistent_table__|__nonexistent_column__")
 
 def extract_table_references(sql: str) -> list[str]:
     tables: list[str] = []
-    for match in re.finditer(
-        r"(?:FROM|JOIN)\s+(\w+(?:\.\w+)?)", sql, re.IGNORECASE
-    ):
+    for match in re.finditer(r"(?:FROM|JOIN)\s+(\w+(?:\.\w+)?)", sql, re.IGNORECASE):
         ref = match.group(1).lower()
         if ref not in tables:
             tables.append(ref)
@@ -35,7 +33,23 @@ def validate_sql_columns(
         }
 
     if db_path == ":memory:" or not db_path:
-        return {"valid": True, "errors": [], "hints": [], "unknown_columns": [], "missing_tables": []}
+        return {
+            "valid": True,
+            "errors": [],
+            "hints": [],
+            "unknown_columns": [],
+            "missing_tables": [],
+        }
+
+    stripped = sql.strip().upper()
+    if not stripped.startswith(("SELECT", "WITH", "EXPLAIN")):
+        return {
+            "valid": False,
+            "errors": ["SQL must start with SELECT or WITH"],
+            "hints": ["Only SELECT and WITH queries are allowed for validation"],
+            "unknown_columns": [],
+            "missing_tables": [],
+        }
 
     try:
         con = duckdb.connect(db_path, read_only=True)
@@ -55,9 +69,7 @@ def validate_sql_columns(
             }
         except duckdb.Error as e:
             error_str = str(e)
-            _logger.debug(
-                "[schema_validator] EXPLAIN failed: %s", error_str[:150]
-            )
+            _logger.debug("[schema_validator] EXPLAIN failed: %s", error_str[:150])
             missing_tables: list[str] = []
             unknown_columns: list[str] = []
             hints: list[str] = []
@@ -69,9 +81,7 @@ def validate_sql_columns(
                 bad_table = table_match.group(1).lower()
                 missing_tables.append(bad_table)
                 suggestions = [
-                    t
-                    for t in schema_by_table
-                    if t.lower().startswith(bad_table[0])
+                    t for t in schema_by_table if t.lower().startswith(bad_table[0])
                 ][:3]
                 if suggestions:
                     hints.append(f"Did you mean: {', '.join(suggestions)}?")

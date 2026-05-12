@@ -1,9 +1,12 @@
 """Tests for schema/SQL nodes: TableSelector, QueryPlanner, SQLGenerator, SQLExecutor."""
 
+import pytest
+
 from nodes import (
     QueryPlannerNode,
     SQLExecutorNode,
     SQLGeneratorNode,
+    SQLValidatorNode,
     TableSelectorNode,
 )
 
@@ -195,6 +198,100 @@ class TestSQLGeneratorNode:
         assert shared["generated_sql"].strip().endswith("LIMIT 200;")
         assert shared["execution_error"] is None
 
+    def test_exec_accepts_with_queries(self, mock_call_llm_structured):
+        mock_call_llm_structured.return_value = {
+            "thinking": "use CTE",
+            "sql": "WITH cte AS (SELECT 1 AS id) SELECT * FROM cte",
+        }
+        node = SQLGeneratorNode()
+        prep_res = {
+            "clean_message": "test",
+            "schema_context": "",
+            "query_plan": "",
+            "history_context": "",
+            "api_key": "k",
+            "model": "m",
+            "system_prompt": "",
+            "execution_error": None,
+            "error_type": None,
+            "error_analysis": None,
+            "schema_recheck": None,
+        }
+        result = node.exec(prep_res)
+        assert "WITH" in result.upper()
+        assert "SELECT" in result.upper()
+
+    def test_exec_rejects_disallowed_prefix(self, mock_call_llm_structured):
+        mock_call_llm_structured.return_value = {
+            "thinking": "oops",
+            "sql": "DROP TABLE dim_player",
+        }
+        node = SQLGeneratorNode()
+        prep_res = {
+            "clean_message": "test",
+            "schema_context": "",
+            "query_plan": "",
+            "history_context": "",
+            "api_key": "k",
+            "model": "m",
+            "system_prompt": "",
+            "execution_error": None,
+            "error_type": None,
+            "error_analysis": None,
+            "schema_recheck": None,
+        }
+        with pytest.raises(ValueError, match="must start with SELECT"):
+            node.exec(prep_res)
+
+    def test_post_raises_on_unsafe_optimized_sql(self, shared, monkeypatch):
+        node = SQLGeneratorNode()
+        monkeypatch.setattr("nodes.optimize_sql", lambda sql: "DROP TABLE users")
+        with pytest.raises(ValueError, match="failed safety check"):
+            node.post(shared, None, "SELECT 1")
+
+
+class TestSQLValidatorNode:
+    def test_post_passes_on_valid(self, shared, monkeypatch):
+        node = SQLValidatorNode()
+        monkeypatch.setattr(
+            "nodes.validate_sql_columns",
+            lambda sql, schema, db_path: {
+                "valid": True,
+                "errors": [],
+                "hints": [],
+                "unknown_columns": [],
+                "missing_tables": [],
+            },
+        )
+        shared["generated_sql"] = "SELECT 1"
+        result = node.post(shared, None, {"valid": True})
+        assert result == "default"
+
+    def test_post_routes_error_on_invalid(self, shared, monkeypatch):
+        node = SQLValidatorNode()
+        monkeypatch.setattr(
+            "nodes.validate_sql_columns",
+            lambda sql, schema, db_path: {
+                "valid": False,
+                "errors": ["column foo does not exist"],
+                "hints": ["Did you mean: bar?"],
+                "unknown_columns": ["foo"],
+                "missing_tables": [],
+            },
+        )
+        shared["generated_sql"] = "SELECT foo FROM dim_player"
+        result = node.post(
+            shared,
+            None,
+            {
+                "valid": False,
+                "errors": ["column foo does not exist"],
+                "hints": ["Did you mean: bar?"],
+            },
+        )
+        assert result == "error"
+        assert "validation_errors" in shared
+
 
 class TestSQLExecutorNode:
     def test_prep_reads_shared(self, shared):
@@ -205,6 +302,14 @@ class TestSQLExecutorNode:
         assert result["db_path"] == ":memory:"
         assert result["max_rows"] == 200
         assert result["timeout"] == 30
+
+    def test_prep_prefers_fixed_sql(self, shared):
+        shared["generated_sql"] = "SELECT 1"
+        shared["fixed_sql"] = "SELECT 2"
+        node = SQLExecutorNode()
+        result = node.prep(shared)
+        assert result["sql"] == "SELECT 2"
+        assert "fixed_sql" not in shared
 
     def test_exec_calls_execute_query(self, shared, mock_execute_query_success):
         node = SQLExecutorNode()

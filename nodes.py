@@ -4,6 +4,7 @@ from typing import Any
 
 from pocketflow import Node
 
+from utils.attempt_tracker import reset_attempts, track_attempts
 from utils.call_llm import call_llm
 from utils.call_llm_structured import call_llm_structured
 from utils.classify_error import classify_error
@@ -159,9 +160,9 @@ class MessagePreprocessorNode(Node):
             entities = {}
         shared["clean_message"] = clean
         shared["entities"] = entities
-        shared["debug_attempts"] = 0
-        shared["max_debug_attempts"] = 3
+        reset_attempts(shared)
         shared.pop("failed_attempts", None)
+        shared.pop("fixed_sql", None)
 
         entities_summary = (
             ", ".join(f"{k}={v}" for k, v in entities.items() if v) or "none"
@@ -568,7 +569,13 @@ class SQLExecutorNode(Node):
     NODE_LABEL = "SQLExecutor"
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
-        sql = shared.get("generated_sql", "")
+        fixed_sql = shared.pop("fixed_sql", None)
+        sql = fixed_sql if fixed_sql else shared.get("generated_sql", "")
+        if fixed_sql:
+            _logger.info(
+                "[SQLExecutor.prep] using fixed_sql from error recovery (%d chars)",
+                len(fixed_sql),
+            )
         sql_preview = sql[:120].replace("\n", " ")
         _logger.info(
             "[SQLExecutor.prep] sql=%d chars, timeout=%ds, max_rows=%d: %s",
@@ -899,10 +906,9 @@ class RecoveryDecisionNode(Node):
     NODE_LABEL = "RecoveryDecision"
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
-        attempts = shared.get("debug_attempts", 0) + 1
+        attempts = track_attempts(shared)
         max_attempts = shared.get("max_debug_attempts", 3)
         error_type = shared.get("error_type", "")
-        shared["debug_attempts"] = attempts
         _logger.info(
             "[RecoveryDecision.prep] attempt %d/%d, error_type=%s",
             attempts,

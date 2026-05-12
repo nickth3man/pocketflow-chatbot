@@ -23,9 +23,7 @@ def get_prompt_cached(name: str) -> str:
 
     content = file_path.read_text(encoding="utf-8")
     _cache[name] = (content, current_mtime)
-    _logger.debug(
-        "[prompt_cache] loaded %s (%d chars)", name, len(content)
-    )
+    _logger.debug("[prompt_cache] loaded %s (%d chars)", name, len(content))
     return content
 
 

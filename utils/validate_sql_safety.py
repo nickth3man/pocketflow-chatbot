@@ -13,8 +13,8 @@ def validate_sql_safety(sql: str) -> tuple[bool, str]:
     if not stripped:
         return False, "SQL statement is empty"
 
-    if not stripped.upper().startswith("SELECT"):
-        return False, "Only SELECT statements are allowed"
+    if not stripped.upper().startswith(("SELECT", "WITH")):
+        return False, "Only SELECT and WITH statements are allowed"
 
     dangerous = _RE_DANGEROUS_KEYWORDS.findall(stripped)
     if dangerous:

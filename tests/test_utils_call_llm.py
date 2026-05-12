@@ -93,7 +93,9 @@ class TestCallLlmStructured:
             "utils.call_llm_structured.call_llm",
             return_value="unrelated: text",
         )
-        with pytest.raises(ValueError, match=r"Required fields.*required_field.*missing"):
+        with pytest.raises(
+            ValueError, match=r"Required fields.*required_field.*missing"
+        ):
             call_llm_structured("prompt", "key", "model", ["required_field"])
 
     def test_parse_yaml_safe_valid(self):
@@ -130,3 +132,12 @@ class TestCallLlmStructured:
         )
         result = call_llm_structured("prompt", "key", "model", [])
         assert result == {"key": "value"}
+
+    def test_regex_fallback_partial_fields_raises(self, mocker):
+        """When regex fallback finds only a subset of required fields, it should still raise."""
+        mocker.patch(
+            "utils.call_llm_structured.call_llm",
+            return_value="thinking: some thought\nunrelated: value",
+        )
+        with pytest.raises(ValueError, match=r"Required fields.*sql.*missing"):
+            call_llm_structured("prompt", "key", "model", ["thinking", "sql"])

@@ -29,7 +29,8 @@ TEAM LOOKUP:
 
 SEASON FILTERING:
   season_year column uses format '2023-24' (NOT 2023, NOT '2023')
-  → Available on: fact_game, fact_player_game_stats, fact_team_game_stats
+  → Available on: fact_game, fact_team_game_stats
+  → For fact_player_game_stats, JOIN fact_game ON game_id to filter by season
   → "last season" = '2023-24' | "this season" = '2024-25'
   → Always filter by season_year unless explicitly spanning multiple seasons
 

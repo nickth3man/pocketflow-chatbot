@@ -33,7 +33,9 @@ class ErrorRecoveryFlow(Flow):
         max_attempts = shared.get("max_debug_attempts", 3)
         _logger.info(
             "[ErrorRecoveryFlow] decision=%s (%d/%d attempts used)",
-            action, attempts, max_attempts,
+            action,
+            attempts,
+            max_attempts,
             extra={
                 "subflow": "error_recovery",
                 "action": action,
@@ -58,28 +60,19 @@ def create_chat_flow() -> Flow:
     history_context_builder = HistoryContextBuilderNode()
     intent_classifier = IntentClassifierNode()
 
-    (
-        message_preprocessor
-        >> history_context_builder
-        >> intent_classifier
+    (message_preprocessor >> history_context_builder >> intent_classifier)
+    _logger.debug(
+        "[Flow] pre-processing chain: MessagePreprocessor → HistoryContextBuilder → IntentClassifier"
     )
-    _logger.debug("[Flow] pre-processing chain: MessagePreprocessor → HistoryContextBuilder → IntentClassifier")
 
     # ── Schema / Planning ───────────────────────────────────────────────
     table_selector = TableSelectorNode()
     query_planner = QueryPlannerNode()
     sql_generator = SQLGeneratorNode()
 
-    (
-        intent_classifier - "query_db"
-        >> table_selector
-    )
+    (intent_classifier - "query_db" >> table_selector)
     _logger.debug("[Flow] query_db path: IntentClassifier → TableSelector")
-    (
-        table_selector
-        >> query_planner
-        >> sql_generator
-    )
+    (table_selector >> query_planner >> sql_generator)
     _logger.debug("[Flow] planning chain: TableSelector → QueryPlanner → SQLGenerator")
 
     # ── Execution ───────────────────────────────────────────────────────
@@ -89,10 +82,7 @@ def create_chat_flow() -> Flow:
     result_analyzer = ResultAnalyzerNode()
     response_builder = ResponseBuilderNode()
 
-    (
-        sql_executor - "success"
-        >> result_analyzer
-    )
+    (sql_executor - "success" >> result_analyzer)
     result_analyzer >> response_builder
     _logger.debug("[Flow] success path: SQLExecutor → ResultAnalyzer → ResponseBuilder")
 
@@ -121,40 +111,28 @@ def create_chat_flow() -> Flow:
     sql_validator - "error" >> error_recovery_flow
     _logger.debug("[Flow] execution: SQLGenerator → SQLValidator → SQLExecutor")
 
-    (
-        sql_executor - "error"
-        >> error_recovery_flow
-    )
+    (sql_executor - "error" >> error_recovery_flow)
     _logger.debug("[Flow] error path: SQLExecutor → ErrorRecoveryFlow")
-    (
-        error_recovery_flow - "retry"
-        >> sql_executor
+    (error_recovery_flow - "retry" >> sql_executor)
+    _logger.debug(
+        "[Flow] retry path: ErrorRecoveryFlow → SQLExecutor (re-execute fixed SQL)"
     )
-    _logger.debug("[Flow] retry path: ErrorRecoveryFlow → SQLExecutor (re-execute fixed SQL)")
-    (
-        error_recovery_flow - "give_up"
-        >> result_analyzer
-    )
+    (error_recovery_flow - "give_up" >> result_analyzer)
     _logger.debug("[Flow] give_up path: ErrorRecoveryFlow → ResultAnalyzer")
 
     # ── Chat path ───────────────────────────────────────────────────────
     chat_responder = ChatResponderNode()
 
-    (
-        intent_classifier - "chat"
-        >> chat_responder
-    )
-    (
-        intent_classifier - "clarify"
-        >> chat_responder
-    )
+    (intent_classifier - "chat" >> chat_responder)
+    (intent_classifier - "clarify" >> chat_responder)
     _logger.debug("[Flow] chat/clarify path: IntentClassifier → ChatResponder")
 
     flow = Flow(start=message_preprocessor)
     elapsed = (time.monotonic() - start) * 1000
     _logger.info(
         "[Flow] DAG created in %.0fms with %d nodes across 3 paths (query_db, chat, clarify)",
-        elapsed, 15,
+        elapsed,
+        15,
         extra={"flow_creation_ms": round(elapsed, 1)},
     )
 
