@@ -1,10 +1,13 @@
 import contextlib
+import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 
 import duckdb
+
+_logger = logging.getLogger("nba_chatbot")
 
 _EXECUTOR = ThreadPoolExecutor(max_workers=1)
 _connections: dict[str, duckdb.DuckDBPyConnection] = {}
@@ -54,9 +57,40 @@ def execute_query(
 ) -> dict:
     start = time.time()
 
+    stripped = sql.strip()
+    operation = stripped.split(None, 1)[0].upper() if stripped else "UNKNOWN"
+    sql_preview = stripped[:120].replace("\n", " ")
+
+    _logger.debug(
+        "[DB] submitting %s query (%d chars) to pool...",
+        operation,
+        len(stripped),
+    )
+
     future = _EXECUTOR.submit(_run_query, db_path, sql, max_rows)
     try:
         columns, rows, elapsed_ms = future.result(timeout=timeout_seconds)
+        row_count = len(rows)
+
+        _logger.info(
+            "[DB] %s (%d cols x %d rows, %.0fms): %s",
+            operation,
+            len(columns),
+            row_count,
+            elapsed_ms,
+            sql_preview,
+            extra={
+                "db_operation": operation,
+                "db_sql_chars": len(stripped),
+                "db_duration_ms": round(elapsed_ms, 1),
+                "db_columns": len(columns),
+                "db_row_count": row_count,
+                "db_success": True,
+                "duration_ms": round(elapsed_ms, 1),
+                "success": True,
+            },
+        )
+
         return {
             "success": True,
             "columns": columns,
@@ -66,6 +100,21 @@ def execute_query(
         }
     except FuturesTimeoutError:
         elapsed_ms = (time.time() - start) * 1000
+        _logger.warning(
+            "[DB] %s ✗ timed out after %ds (%d chars): %s",
+            operation,
+            timeout_seconds,
+            len(stripped),
+            sql_preview,
+            extra={
+                "db_operation": operation,
+                "db_duration_ms": round(elapsed_ms, 1),
+                "db_success": False,
+                "db_error": f"timeout after {timeout_seconds}s",
+                "duration_ms": round(elapsed_ms, 1),
+                "success": False,
+            },
+        )
         return {
             "success": False,
             "columns": [],
@@ -75,10 +124,25 @@ def execute_query(
         }
     except duckdb.Error as e:
         elapsed_ms = (time.time() - start) * 1000
+        error_str = str(e)
+        _logger.warning(
+            "[DB] %s ✗ DuckDB error after %.0fms: %s",
+            operation,
+            elapsed_ms,
+            error_str[:200],
+            extra={
+                "db_operation": operation,
+                "db_duration_ms": round(elapsed_ms, 1),
+                "db_success": False,
+                "db_error": error_str[:200],
+                "duration_ms": round(elapsed_ms, 1),
+                "success": False,
+            },
+        )
         return {
             "success": False,
             "columns": [],
             "rows": [],
             "elapsed_ms": elapsed_ms,
-            "error": str(e),
+            "error": error_str,
         }

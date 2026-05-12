@@ -4,15 +4,13 @@ Usage: uv run python run_eval.py
 """
 
 import json
-import logging
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from pathlib import Path
 from typing import Any
-
-QUERY_TIMEOUT_S = 300  # hard ceiling per query — prevents runaway retry loops
 
 from dotenv import load_dotenv
 
@@ -22,6 +20,8 @@ from utils.logging_setup import setup_logging
 
 load_dotenv()
 setup_logging(prefix="eval")
+
+QUERY_TIMEOUT_S = 300  # hard ceiling per query — prevents runaway retry loops
 
 _PROJECT_ROOT = Path(__file__).resolve().parent
 _DEFAULT_DB_PATH = str(_PROJECT_ROOT / "test-db" / "nba.duckdb")
@@ -239,13 +239,16 @@ def build_shared(schema_by_table: dict) -> dict[str, Any]:
     }
 
 
-def run_query(
-    flow: Any, shared_base: dict, query: str
-) -> dict[str, Any]:
+def run_query(flow: Any, shared_base: dict, query: str) -> dict[str, Any]:
     shared = {**shared_base, "chat_history": []}
     shared["user_message"] = query
     shared["step_logs"] = []
-    shared["chat_history"].append({"role": "user", "content": query, "sql": None, "error": False})
+    shared["chat_history"].append({
+        "role": "user",
+        "content": query,
+        "sql": None,
+        "error": False,
+    })
 
     t0 = time.monotonic()
     error = None
@@ -285,13 +288,21 @@ def check_result(result: dict, checks: list[str]) -> list[str]:
     rows = result.get("rows", [])
     cols = result.get("columns", [])
 
-    if "season_year" in checks and result.get("intent") == "query_db":
-        if "SEASON_YEAR" not in sql and sql:
-            failures.append("season_year: filter missing from SQL")
+    if (
+        "season_year" in checks
+        and result.get("intent") == "query_db"
+        and "SEASON_YEAR" not in sql
+        and sql
+    ):
+        failures.append("season_year: filter missing from SQL")
 
     if "82_game_cap" in checks and rows and result.get("intent") == "query_db":
         # find a 'games' or 'count' column and check all values
-        game_cols = [c for c in cols if c.lower() in ("games", "count", "game_count", "total_games")]
+        game_cols = [
+            c
+            for c in cols
+            if c.lower() in ("games", "count", "game_count", "total_games")
+        ]
         for gc in game_cols:
             idx = cols.index(gc)
             for row in rows:

@@ -1,9 +1,10 @@
 import logging
-from pathlib import Path
+import time
 from typing import Any
 
 from pocketflow import Node
 
+from utils.attempt_tracker import reset_attempts, track_attempts
 from utils.call_llm import call_llm
 from utils.call_llm_structured import call_llm_structured
 from utils.classify_error import classify_error
@@ -13,21 +14,16 @@ from utils.format_results_table import format_results_table
 from utils.format_schema import format_schema
 from utils.get_schema_subset import get_schema_subset
 from utils.optimize_sql import optimize_sql
+from utils.prompt_cache import get_prompt_cached
+from utils.schema_validator import validate_sql_columns
 from utils.validate_sql_safety import validate_sql_safety
-
-PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 _logger = logging.getLogger("nba_chatbot")
 
 _VALID_INTENTS = frozenset({"query_db", "chat", "clarify"})
 
 
-def _load_prompt(name: str) -> str:
-    return (PROMPTS_DIR / name).read_text(encoding="utf-8")
-
-
 def _ensure_str(val: Any, sep: str = "\n") -> str:
-    """Coerce a value to str — guards against LLMs returning YAML lists for string fields."""
     if isinstance(val, list):
         return sep.join(str(item) for item in val)
     if val is None:
@@ -40,35 +36,113 @@ def _log_step(
     node_name: str,
     summary: str,
     status: str = "complete",
+    extra: dict[str, Any] | None = None,
 ) -> None:
-    _logger.info("[%s] %s", node_name, summary)
-    shared.setdefault("step_logs", []).append({
+    _logger.info("[%s] %s", node_name, summary, extra=extra or {})
+    entry: dict[str, Any] = {
         "node": node_name,
         "status": status,
         "summary": summary,
+    }
+    if extra and isinstance(extra, dict):
+        entry.update({k: v for k, v in extra.items() if k not in entry})
+    shared.setdefault("step_logs", []).append(entry)
+
+
+def _log_stage(
+    shared: dict[str, Any],
+    node_name: str,
+    stage: str,
+    summary: str,
+    *,
+    elapsed_ms: float = 0,
+    status: str = "complete",
+    extra: dict[str, Any] | None = None,
+) -> None:
+    log_extra: dict[str, Any] = {"duration_ms": round(elapsed_ms, 1)}
+    if extra:
+        log_extra.update(extra)
+    label = f"{node_name}.{stage}"
+    _logger.info(
+        "[%s] %s (%.0fms)",
+        label,
+        summary,
+        elapsed_ms,
+        extra=log_extra,
+    )
+
+
+def _append_assistant_turn(
+    shared: dict[str, Any],
+    content: str,
+    sql: str | None = None,
+    error: bool = False,
+) -> None:
+    shared.setdefault("chat_history", []).append({
+        "role": "assistant",
+        "content": content,
+        "sql": sql,
+        "error": error,
     })
+
+
+def _run_stage(
+    shared: dict[str, Any],
+    node_name: str,
+    stage: str,
+    summary: str,
+    fn: Any,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    start = time.monotonic()
+    try:
+        result = fn(*args, **kwargs)
+        elapsed = (time.monotonic() - start) * 1000
+        _log_stage(shared, node_name, stage, summary, elapsed_ms=elapsed)
+        return result
+    except Exception as e:
+        elapsed = (time.monotonic() - start) * 1000
+        _log_stage(
+            shared,
+            node_name,
+            stage,
+            f"✗ {str(e)[:80]}",
+            elapsed_ms=elapsed,
+            status="error",
+            extra={"error": str(e)[:200]},
+        )
+        raise
 
 
 # ── Pre-processing Stage ────────────────────────────────────────────────────
 
 
 class MessagePreprocessorNode(Node):
+    NODE_LABEL = "Preprocess"
+
     def __init__(self) -> None:
         super().__init__(max_retries=2, wait=1)
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
+        raw = shared.get("user_message", "")
         _logger.info(
-            "[MessagePreprocessor] prep: input=%s", shared.get("user_message", "")[:60]
+            "[Preprocess.prep] raw input=%d chars, first 100: %s",
+            len(raw),
+            raw[:100],
         )
         return {
-            "user_message": shared["user_message"],
+            "user_message": raw,
             "api_key": shared["openrouter_api_key"],
             "model": shared["openrouter_model"],
-            "system_prompt": _load_prompt("preprocess_prompt.txt"),
+            "system_prompt": get_prompt_cached("preprocess_prompt.txt"),
         }
 
     def exec(self, prep_res: dict[str, Any]) -> dict[str, Any]:
-        _logger.info("[MessagePreprocessor] exec: calling LLM to clean message...")
+        _logger.info(
+            "[Preprocess.exec] calling LLM to clean message (model=%s)...",
+            prep_res.get("model", "?"),
+        )
         return call_llm_structured(
             prompt=prep_res["user_message"],
             api_key=prep_res["api_key"],
@@ -80,27 +154,44 @@ class MessagePreprocessorNode(Node):
     def post(
         self, shared: dict[str, Any], prep_res: Any, exec_res: dict[str, Any]
     ) -> str:
-        shared["clean_message"] = _ensure_str(exec_res.get("clean_message", ""))
+        clean = _ensure_str(exec_res.get("clean_message", ""))
         entities = exec_res.get("entities", {})
         if not isinstance(entities, dict):
             entities = {}
+        shared["clean_message"] = clean
         shared["entities"] = entities
+        reset_attempts(shared)
+        shared.pop("failed_attempts", None)
+        shared.pop("fixed_sql", None)
+
         entities_summary = (
             ", ".join(f"{k}={v}" for k, v in entities.items() if v) or "none"
         )
-        _log_step(shared, "Preprocess", f"cleaned, entities: {entities_summary}")
+        _log_step(
+            shared,
+            self.NODE_LABEL,
+            f"cleaned '{clean[:80]}' entities={entities_summary}",
+            extra={"clean_chars": len(clean), "entity_keys": list(entities.keys())},
+        )
         return "default"
 
 
 class HistoryContextBuilderNode(Node):
+    NODE_LABEL = "HistoryContext"
+
     def __init__(self) -> None:
         super().__init__(max_retries=1, wait=0)
 
     def prep(self, shared: dict[str, Any]) -> list[dict[str, Any]]:
-        return shared.get("chat_history", [])[-6:]
+        history = shared.get("chat_history", [])
+        _logger.debug(
+            "[HistoryContext.prep] %d total entries, taking last 6", len(history)
+        )
+        return history[-6:]
 
     def exec(self, prep_res: list[dict[str, Any]]) -> str:
         if not prep_res:
+            _logger.debug("[HistoryContext.exec] no history to format")
             return ""
         lines: list[str] = []
         for entry in prep_res:
@@ -112,30 +203,53 @@ class HistoryContextBuilderNode(Node):
                 lines.append(f'[{role}: "{content[:200]}" / SQL: ({intent})]')
             else:
                 lines.append(f'[{role}: "{content[:200]}"]')
-        return "\n".join(lines)
+        result = "\n".join(lines)
+        _logger.debug(
+            "[HistoryContext.exec] formatted %d history entries into %d chars",
+            len(prep_res),
+            len(result),
+        )
+        return result
 
     def post(self, shared: dict[str, Any], prep_res: Any, exec_res: str) -> str:
         shared["history_context"] = exec_res
         entry_count = len(prep_res) if prep_res else 0
-        _log_step(shared, "HistoryContext", f"{entry_count} history entries formatted")
+        _log_step(
+            shared,
+            self.NODE_LABEL,
+            f"{entry_count} history entries → {len(exec_res)} chars",
+            extra={"history_entries": entry_count, "history_chars": len(exec_res)},
+        )
         return "default"
 
 
 class IntentClassifierNode(Node):
+    NODE_LABEL = "IntentClassifier"
+
     def __init__(self) -> None:
         super().__init__(max_retries=2, wait=1)
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
+        clean = shared.get("clean_message", "")
+        history = shared.get("history_context", "")
+        _logger.debug(
+            "[IntentClassifier.prep] clean='%s' history=%d chars",
+            clean[:60],
+            len(history),
+        )
         return {
-            "clean_message": shared.get("clean_message", ""),
-            "history_context": shared.get("history_context", ""),
+            "clean_message": clean,
+            "history_context": history,
             "api_key": shared["openrouter_api_key"],
             "model": shared["openrouter_model"],
-            "system_prompt": _load_prompt("intent_classifier_prompt.txt"),
+            "system_prompt": get_prompt_cached("intent_classifier_prompt.txt"),
         }
 
     def exec(self, prep_res: dict[str, Any]) -> dict[str, Any]:
-        _logger.info("[IntentClassifier] exec: classifying intent...")
+        _logger.info(
+            "[IntentClassifier.exec] classifying intent (model=%s)...",
+            prep_res.get("model", "?"),
+        )
         prompt = (
             f"User message: {prep_res['clean_message']}\n\n"
             f"Conversation context:\n{prep_res['history_context']}"
@@ -153,12 +267,19 @@ class IntentClassifierNode(Node):
     ) -> str:
         intent = _ensure_str(exec_res.get("intent", "chat")).strip().lower()
         if intent not in _VALID_INTENTS:
+            _logger.warning(
+                "[IntentClassifier.post] invalid intent '%s' → defaulting to chat",
+                intent,
+            )
             intent = "chat"
         shared["intent"] = intent
-        shared["debug_attempts"] = 0
-        shared["max_debug_attempts"] = 3
         reason = _ensure_str(exec_res.get("reason", ""))
-        _log_step(shared, "IntentClassifier", f"intent={intent} ({reason[:60]})")
+        _log_step(
+            shared,
+            self.NODE_LABEL,
+            f"intent={intent} ({reason[:80]})",
+            extra={"intent": intent, "reason": reason[:200]},
+        )
         return intent
 
 
@@ -166,20 +287,32 @@ class IntentClassifierNode(Node):
 
 
 class TableSelectorNode(Node):
+    NODE_LABEL = "TableSelector"
+
     def __init__(self) -> None:
         super().__init__(max_retries=2, wait=1)
 
     def exec_fallback(self, prep_res: Any, exc: Exception) -> dict[str, Any]:
         schema_by_table = prep_res.get("schema_by_table", {}) if prep_res else {}
         all_tables = list(schema_by_table.keys())
+        _logger.warning(
+            "[TableSelector] fallback: using all %d tables due to error: %s",
+            len(all_tables),
+            exc,
+        )
         return {
             "tables": all_tables,
-            "reason": "fallback: using all tables due to selection error",
+            "reason": f"fallback: using all tables due to selection error: {exc}",
         }
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
         schema_by_table = shared.get("schema_by_table", {})
         table_listing = "\n".join(f"- {name}" for name in schema_by_table)
+        _logger.debug(
+            "[TableSelector.prep] %d available tables, entities=%s",
+            len(schema_by_table),
+            shared.get("entities", {}),
+        )
         return {
             "clean_message": shared.get("clean_message", ""),
             "entities": shared.get("entities", {}),
@@ -188,11 +321,15 @@ class TableSelectorNode(Node):
             "model": shared["openrouter_model"],
             "table_listing": table_listing,
             "schema_by_table": schema_by_table,
-            "system_prompt": _load_prompt("table_selector_prompt.txt"),
+            "system_prompt": get_prompt_cached("table_selector_prompt.txt"),
         }
 
     def exec(self, prep_res: dict[str, Any]) -> dict[str, Any]:
-        _logger.info("[TableSelector] exec: selecting relevant tables...")
+        _logger.info(
+            "[TableSelector.exec] selecting tables from %d candidates (model=%s)...",
+            len(prep_res.get("schema_by_table", {})),
+            prep_res.get("model", "?"),
+        )
         prompt = (
             f"User question: {prep_res['clean_message']}\n\n"
             f"Entities: {prep_res['entities']}\n\n"
@@ -209,16 +346,30 @@ class TableSelectorNode(Node):
     def post(
         self, shared: dict[str, Any], prep_res: Any, exec_res: dict[str, Any]
     ) -> str:
-        selected_tables = exec_res["tables"]
+        selected = exec_res["tables"]
+        reason = _ensure_str(exec_res.get("reason", ""))
         schema_by_table = prep_res["schema_by_table"]
-        shared["selected_tables"] = selected_tables
-        subset = get_schema_subset(schema_by_table, selected_tables)
-        shared["schema_context"] = format_schema(subset)
-        _log_step(shared, "TableSelector", f"tables={selected_tables}")
+        shared["selected_tables"] = selected
+        subset = get_schema_subset(schema_by_table, selected)
+        schema_text = format_schema(subset)
+        shared["schema_context"] = schema_text
+        _log_step(
+            shared,
+            self.NODE_LABEL,
+            f"tables={selected} ({len(subset)} tables, {len(schema_text)} schema chars) — {reason[:60]}",
+            extra={
+                "selected_tables": selected,
+                "schema_chars": len(schema_text),
+                "table_count": len(selected),
+                "reason": reason[:200],
+            },
+        )
         return "default"
 
 
 class QueryPlannerNode(Node):
+    NODE_LABEL = "QueryPlanner"
+
     def __init__(self) -> None:
         super().__init__(max_retries=2, wait=1)
 
@@ -228,6 +379,7 @@ class QueryPlannerNode(Node):
             if prep_res
             else "the user question"
         )
+        _logger.warning("[QueryPlanner] fallback plan due to error: %s", exc)
         return {
             "plan": f"Select all relevant columns to answer: {question}",
             "tables_used": prep_res.get("entities", {}) if prep_res else [],
@@ -236,18 +388,28 @@ class QueryPlannerNode(Node):
         }
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
+        schema = shared.get("schema_context", "")
+        _logger.debug(
+            "[QueryPlanner.prep] schema=%d chars, entities=%s",
+            len(schema),
+            shared.get("entities", {}),
+        )
         return {
             "clean_message": shared.get("clean_message", ""),
             "entities": shared.get("entities", {}),
-            "schema_context": shared.get("schema_context", ""),
+            "schema_context": schema,
             "history_context": shared.get("history_context", ""),
             "api_key": shared["openrouter_api_key"],
             "model": shared["openrouter_model"],
-            "system_prompt": _load_prompt("query_planner_prompt.txt"),
+            "system_prompt": get_prompt_cached("query_planner_prompt.txt"),
         }
 
     def exec(self, prep_res: dict[str, Any]) -> dict[str, Any]:
-        _logger.info("[QueryPlanner] exec: planning query...")
+        _logger.info(
+            "[QueryPlanner.exec] planning with %d schema chars (model=%s)...",
+            len(prep_res.get("schema_context", "")),
+            prep_res.get("model", "?"),
+        )
         prompt = (
             f"User question: {prep_res['clean_message']}\n\n"
             f"Entities: {prep_res['entities']}\n\n"
@@ -266,17 +428,39 @@ class QueryPlannerNode(Node):
         self, shared: dict[str, Any], prep_res: Any, exec_res: dict[str, Any]
     ) -> str:
         plan = _ensure_str(exec_res.get("plan", ""))
+        tables_used = exec_res.get("tables_used", [])
+        filters = exec_res.get("filters", [])
+        aggregations = exec_res.get("aggregations", [])
         shared["query_plan"] = plan
-        plan_preview = plan[:60].replace("\n", " ")
-        _log_step(shared, "QueryPlanner", f"plan: {plan_preview}...")
+        plan_preview = plan[:80].replace("\n", " ")
+        _log_step(
+            shared,
+            self.NODE_LABEL,
+            f"plan='{plan_preview}...' tables={tables_used} filters={filters} aggs={aggregations}",
+            extra={
+                "plan_chars": len(plan),
+                "tables_used": tables_used,
+                "filters": filters,
+                "aggregations": aggregations,
+            },
+        )
         return "default"
 
 
 class SQLGeneratorNode(Node):
+    NODE_LABEL = "SQLGenerator"
+
     def __init__(self) -> None:
         super().__init__(max_retries=3, wait=2)
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
+        attempts = shared.get("debug_attempts", 0)
+        if attempts > 0:
+            _logger.info(
+                "[SQLGenerator.prep] retry #%d after error recovery — prev error=%s",
+                attempts,
+                shared.get("execution_error", "")[:100],
+            )
         return {
             "clean_message": shared.get("clean_message", ""),
             "schema_context": shared.get("schema_context", ""),
@@ -284,14 +468,24 @@ class SQLGeneratorNode(Node):
             "history_context": shared.get("history_context", ""),
             "api_key": shared["openrouter_api_key"],
             "model": shared["openrouter_model"],
-            "system_prompt": _load_prompt("sql_generator_prompt.txt"),
+            "system_prompt": get_prompt_cached("sql_generator_prompt.txt"),
             "execution_error": shared.get("execution_error"),
             "error_type": shared.get("error_type"),
             "error_analysis": shared.get("error_analysis"),
             "schema_recheck": shared.get("schema_recheck"),
+            "debug_attempts": attempts,
         }
 
     def exec(self, prep_res: dict[str, Any]) -> str:
+        is_retry = prep_res.get("debug_attempts", 0) > 0
+        _logger.info(
+            "[SQLGenerator.exec] generating SQL%s (model=%s, plan=%d chars, schema=%d chars)...",
+            " [retry]" if is_retry else "",
+            prep_res.get("model", "?"),
+            len(prep_res.get("query_plan", "")),
+            len(prep_res.get("schema_context", "")),
+        )
+
         prompt = (
             f"User question: {prep_res['clean_message']}\n\n"
             f"Schema context:\n{prep_res['schema_context']}\n\n"
@@ -299,7 +493,7 @@ class SQLGeneratorNode(Node):
             f"Conversation context:\n{prep_res['history_context']}"
         )
 
-        if prep_res.get("execution_error"):
+        if is_retry:
             prompt += (
                 f"\n\nPREVIOUS ATTEMPT FAILED — error context:\n"
                 f"Error: {prep_res['execution_error']}\n"
@@ -307,6 +501,11 @@ class SQLGeneratorNode(Node):
                 f"Error analysis: {prep_res.get('error_analysis', 'N/A')}\n"
                 f"Re-checked schema:\n{prep_res.get('schema_recheck', 'N/A')}\n"
                 f"\nPlease generate a corrected SQL that fixes the above error."
+            )
+            _logger.debug(
+                "[SQLGenerator.exec] retry context: prev_error=%s, schema_recheck=%d chars",
+                (prep_res.get("execution_error") or "")[:80],
+                len(prep_res.get("schema_recheck", "") or ""),
             )
 
         result = call_llm_structured(
@@ -318,24 +517,48 @@ class SQLGeneratorNode(Node):
         )
 
         sql = result["sql"]
-        if not sql.strip().upper().startswith("SELECT"):
-            raise ValueError("Generated SQL must start with SELECT")
+        _logger.debug("[SQLGenerator.exec] raw SQL (%d chars): %s", len(sql), sql[:120])
 
-        is_safe, reason = validate_sql_safety(sql)
+        if not sql.strip().upper().startswith(("SELECT", "WITH")):
+            raise ValueError(
+                f"Generated SQL must start with SELECT or WITH, got: {sql[:50]}"
+            )
+
+        is_safe, safety_reason = validate_sql_safety(sql)
         if not is_safe:
-            raise ValueError(f"SQL safety check failed: {reason}")
+            raise ValueError(f"SQL safety check failed: {safety_reason}")
+        _logger.debug("[SQLGenerator.exec] safety check passed")
 
         return sql
 
     def exec_fallback(self, prep_res: Any, exc: Exception) -> str:
-        return "SELECT 'SQL generation failed after retries' AS error"
+        _logger.warning("[SQLGenerator] fallback after retries: %s", exc)
+        return "SELECT 'SQL generation failed after retries' AS error;"
 
     def post(self, shared: dict[str, Any], prep_res: Any, exec_res: str) -> str:
         optimized = optimize_sql(exec_res)
+        if optimized != exec_res:
+            _logger.debug(
+                "[SQLGenerator.post] optimize_sql modified SQL:\n  before: %s\n  after:  %s",
+                exec_res[:80],
+                optimized[:80],
+            )
+        is_safe, safety_reason = validate_sql_safety(optimized)
+        if not is_safe:
+            raise ValueError(f"Optimized SQL failed safety check: {safety_reason}")
         shared["generated_sql"] = optimized
         shared["execution_error"] = None
-        sql_preview = optimized[:80].replace("\n", " ")
-        _log_step(shared, "SQLGenerator", f"SQL: {sql_preview}...")
+        sql_preview = optimized[:120].replace("\n", " ")
+        _log_step(
+            shared,
+            self.NODE_LABEL,
+            f"SQL ({len(optimized)} chars): {sql_preview}...",
+            extra={
+                "sql_chars": len(optimized),
+                "sql_full": optimized[:500],
+                "is_retry": (prep_res.get("debug_attempts", 0) if prep_res else 0) > 0,
+            },
+        )
         return "default"
 
 
@@ -343,14 +566,27 @@ class SQLGeneratorNode(Node):
 
 
 class SQLExecutorNode(Node):
+    NODE_LABEL = "SQLExecutor"
+
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
+        fixed_sql = shared.pop("fixed_sql", None)
+        sql = fixed_sql if fixed_sql else shared.get("generated_sql", "")
+        if fixed_sql:
+            _logger.info(
+                "[SQLExecutor.prep] using fixed_sql from error recovery (%d chars)",
+                len(fixed_sql),
+            )
+        sql_preview = sql[:120].replace("\n", " ")
         _logger.info(
-            "[SQLExecutor] prep: executing SQL (%d chars)...",
-            len(shared.get("generated_sql", "")),
+            "[SQLExecutor.prep] sql=%d chars, timeout=%ds, max_rows=%d: %s",
+            len(sql),
+            shared.get("db_query_timeout", 30),
+            shared.get("max_rows", 200),
+            sql_preview,
         )
         return {
             "db_path": shared["db_path"],
-            "sql": shared["generated_sql"],
+            "sql": sql,
             "max_rows": shared.get("max_rows", 200),
             "timeout": shared.get("db_query_timeout", 30),
         }
@@ -370,18 +606,33 @@ class SQLExecutorNode(Node):
             shared["sql_result"] = exec_res
             shared["response_sql"] = shared.get("generated_sql", "")
             row_count = len(exec_res.get("rows", []))
+            col_count = len(exec_res.get("columns", []))
             elapsed = exec_res.get("elapsed_ms", 0)
+            rows_preview = exec_res.get("rows", [])[:3] if row_count else []
             _log_step(
-                shared, "SQLExecutor", f"success ({row_count} rows, {elapsed:.0f}ms)"
+                shared,
+                self.NODE_LABEL,
+                f"success: {col_count} cols x {row_count} rows ({elapsed:.0f}ms)",
+                extra={
+                    "columns": col_count,
+                    "rows": row_count,
+                    "duration_ms": round(elapsed, 1),
+                    "sample_rows": len(rows_preview),
+                },
             )
             return "success"
 
-        shared["execution_error"] = exec_res["error"]
+        error_msg = exec_res.get("error", "")
+        shared["execution_error"] = error_msg
         _log_step(
             shared,
-            "SQLExecutor",
-            f"error: {exec_res.get('error', '')[:80]}",
+            self.NODE_LABEL,
+            f"error: {error_msg[:120]}",
             status="error",
+            extra={
+                "db_error": error_msg[:300],
+                "error_length": len(error_msg),
+            },
         )
         return "error"
 
@@ -390,11 +641,14 @@ class SQLExecutorNode(Node):
 
 
 class ErrorAnalyzerNode(Node):
+    NODE_LABEL = "ErrorAnalyzer"
+
     def __init__(self) -> None:
         super().__init__(max_retries=2, wait=1)
 
     def exec_fallback(self, prep_res: Any, exc: Exception) -> dict[str, Any]:
         error_type = prep_res.get("error_type", "unknown") if prep_res else "unknown"
+        _logger.warning("[ErrorAnalyzer] fallback analysis due to error: %s", exc)
         return {
             "error_type": error_type,
             "root_cause": "Could not analyze error automatically",
@@ -403,12 +657,26 @@ class ErrorAnalyzerNode(Node):
         }
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
+        shared.pop("sql_result", None)
         error_msg = shared.get("execution_error", "")
         error_type = classify_error(error_msg)
+        sql = shared.get("generated_sql", "")
+        _logger.info(
+            "[ErrorAnalyzer.prep] error='%s' classified_type=%s sql_len=%d",
+            error_msg[:100],
+            error_type,
+            len(sql),
+        )
+        failed = shared.setdefault("failed_attempts", [])
+        failed.append({
+            "sql": shared.get("generated_sql", "")[:500],
+            "error": error_msg[:300],
+            "error_type": error_type,
+        })
         return {
             "execution_error": error_msg,
             "error_type": error_type,
-            "generated_sql": shared.get("generated_sql", ""),
+            "generated_sql": sql,
             "clean_message": shared.get("clean_message", ""),
             "schema_context": shared.get("schema_context", ""),
             "api_key": shared["openrouter_api_key"],
@@ -416,8 +684,18 @@ class ErrorAnalyzerNode(Node):
         }
 
     def exec(self, prep_res: dict[str, Any]) -> dict[str, Any]:
-        prompt = f"Error: {prep_res['execution_error']}\n\nFailed SQL:\n{prep_res['generated_sql']}\n\nOriginal question:\n{prep_res['clean_message']}\n\nSchema context:\n{prep_res['schema_context']}"
-        system_prompt = _load_prompt("error_analyzer_prompt.txt").format(
+        _logger.info(
+            "[ErrorAnalyzer.exec] analyzing error (model=%s, type=%s)...",
+            prep_res.get("model", "?"),
+            prep_res.get("error_type", "?"),
+        )
+        prompt = (
+            f"Error: {prep_res['execution_error']}\n\n"
+            f"Failed SQL:\n{prep_res['generated_sql']}\n\n"
+            f"Original question:\n{prep_res['clean_message']}\n\n"
+            f"Schema context:\n{prep_res['schema_context']}"
+        )
+        system_prompt = get_prompt_cached("error_analyzer_prompt.txt").format(
             error_type=prep_res["error_type"],
             sql=prep_res["generated_sql"],
             question=prep_res["clean_message"],
@@ -439,53 +717,94 @@ class ErrorAnalyzerNode(Node):
     def post(
         self, shared: dict[str, Any], prep_res: Any, exec_res: dict[str, Any]
     ) -> str:
-        shared["error_type"] = _ensure_str(
+        error_type = _ensure_str(
             exec_res.get(
                 "error_type",
                 prep_res.get("error_type", "unknown") if prep_res else "unknown",
             )
         )
+        shared["error_type"] = error_type
         shared["error_analysis"] = exec_res
         root_cause = _ensure_str(exec_res.get("root_cause", ""))[:80]
+        affected = exec_res.get("affected_entities", [])
+        fix_dir = _ensure_str(exec_res.get("suggested_fix_direction", ""))[:80]
         _log_step(
             shared,
-            "ErrorAnalyzer",
-            f"type={shared['error_type']}, root: {root_cause}",
+            self.NODE_LABEL,
+            f"type={error_type} root='{root_cause}' affected={affected} fix='{fix_dir}'",
+            extra={
+                "error_type": error_type,
+                "root_cause": root_cause,
+                "affected_entities": affected,
+                "fix_direction": fix_dir,
+            },
         )
         return "default"
 
 
 class SchemaRecheckNode(Node):
+    NODE_LABEL = "SchemaRecheck"
+
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
         error_analysis = shared.get("error_analysis", {})
         affected = error_analysis.get("affected_entities", [])
-        schema_by_table = shared.get("schema_by_table", {})
+        _logger.info(
+            "[SchemaRecheck.prep] checking %d entities: %s",
+            len(affected),
+            affected,
+        )
         return {
             "affected_entities": affected,
-            "schema_by_table": schema_by_table,
+            "schema_by_table": shared.get("schema_by_table", {}),
         }
 
     def exec(self, prep_res: dict[str, Any]) -> str:
         affected = prep_res["affected_entities"]
         schema_by_table = prep_res["schema_by_table"]
-        if not affected:
-            return ""
+        if not affected or affected == ["__nonexistent_table__"]:
+            fallback_tables = list(schema_by_table.keys())[:5]
+            _logger.debug(
+                "[SchemaRecheck.exec] no valid affected entities, falling back to %s",
+                fallback_tables,
+            )
+            subset = get_schema_subset(schema_by_table, fallback_tables)
+            schema_text = format_schema(subset)
+            _logger.debug(
+                "[SchemaRecheck.exec] re-checked %d tables → %d chars schema",
+                len(subset),
+                len(schema_text),
+            )
+            return schema_text
         subset = get_schema_subset(schema_by_table, affected)
-        return format_schema(subset)
+        schema_text = format_schema(subset)
+        _logger.debug(
+            "[SchemaRecheck.exec] re-checked %d tables → %d chars schema",
+            len(subset),
+            len(schema_text),
+        )
+        return schema_text
 
     def post(self, shared: dict[str, Any], prep_res: Any, exec_res: str) -> str:
         shared["schema_recheck"] = exec_res
         pr = prep_res or {}
         affected = pr.get("affected_entities", [])
-        _log_step(shared, "SchemaRecheck", f"re-checked {affected}")
+        _log_step(
+            shared,
+            self.NODE_LABEL,
+            f"re-checked {affected} → {len(exec_res)} schema chars",
+            extra={"affected_entities": affected, "recheck_chars": len(exec_res)},
+        )
         return "default"
 
 
 class SQLFixerNode(Node):
+    NODE_LABEL = "SQLFixer"
+
     def __init__(self) -> None:
         super().__init__(max_retries=2, wait=1)
 
     def exec_fallback(self, prep_res: Any, exc: Exception) -> str:
+        _logger.warning("[SQLFixer] fallback due to error: %s", exc)
         return (
             prep_res.get("generated_sql", "SELECT 'SQL fix failed' AS error")
             if prep_res
@@ -493,10 +812,17 @@ class SQLFixerNode(Node):
         )
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
+        sql = shared.get("generated_sql", "")
+        error_type = shared.get("error_type", "")
+        _logger.info(
+            "[SQLFixer.prep] fixing SQL (%d chars, error=%s)...",
+            len(sql),
+            error_type,
+        )
         return {
             "clean_message": shared.get("clean_message", ""),
-            "generated_sql": shared.get("generated_sql", ""),
-            "error_type": shared.get("error_type", ""),
+            "generated_sql": sql,
+            "error_type": error_type,
             "error_analysis": shared.get("error_analysis", {}),
             "schema_recheck": shared.get("schema_recheck", ""),
             "query_plan": shared.get("query_plan", ""),
@@ -505,7 +831,12 @@ class SQLFixerNode(Node):
         }
 
     def exec(self, prep_res: dict[str, Any]) -> str:
-        prompt = _load_prompt("sql_fixer_prompt.txt").format(
+        _logger.info(
+            "[SQLFixer.exec] fixing SQL (model=%s, input_sql=%d chars)...",
+            prep_res.get("model", "?"),
+            len(prep_res.get("generated_sql", "")),
+        )
+        prompt = get_prompt_cached("sql_fixer_prompt.txt").format(
             question=prep_res["clean_message"],
             sql=prep_res["generated_sql"],
             error_type=prep_res["error_type"],
@@ -521,21 +852,35 @@ class SQLFixerNode(Node):
         )
 
         sql = result["sql"]
-        if not sql.strip().upper().startswith("SELECT"):
-            raise ValueError("Fixed SQL must start with SELECT")
+        if not sql.strip().upper().startswith(("SELECT", "WITH")):
+            raise ValueError(
+                f"Fixed SQL must start with SELECT or WITH, got: {sql[:50]}"
+            )
 
+        _logger.debug("[SQLFixer.exec] fixed SQL (%d chars): %s", len(sql), sql[:100])
         return sql
 
     def post(self, shared: dict[str, Any], prep_res: Any, exec_res: str) -> str:
         shared["fixed_sql"] = exec_res
-        sql_preview = exec_res[:80].replace("\n", " ")
-        _log_step(shared, "SQLFixer", f"fixed SQL: {sql_preview}...")
+        sql_preview = exec_res[:100].replace("\n", " ")
+        _log_step(
+            shared,
+            self.NODE_LABEL,
+            f"fixed SQL ({len(exec_res)} chars): {sql_preview}...",
+            extra={"sql_chars": len(exec_res)},
+        )
         return "default"
 
 
 class FixValidatorNode(Node):
+    NODE_LABEL = "FixValidator"
+
     def prep(self, shared: dict[str, Any]) -> str:
-        return shared.get("fixed_sql", "")
+        fixed_sql = shared.get("fixed_sql", "")
+        _logger.debug(
+            "[FixValidator.prep] validating fixed SQL (%d chars)", len(fixed_sql)
+        )
+        return fixed_sql
 
     def exec(self, prep_res: str) -> tuple[bool, str]:
         return validate_sql_safety(prep_res)
@@ -546,24 +891,36 @@ class FixValidatorNode(Node):
         is_safe, reason = exec_res
         if is_safe:
             shared["generated_sql"] = shared.get("fixed_sql", "")
+        else:
+            shared.pop("fixed_sql", None)
         status = "complete" if is_safe else "error"
         _log_step(
             shared,
-            "FixValidator",
+            self.NODE_LABEL,
             f"safety={'passed' if is_safe else 'failed'}: {reason}",
             status=status,
+            extra={"is_safe": is_safe, "reason": reason},
         )
         return "default"
 
 
 class RecoveryDecisionNode(Node):
+    NODE_LABEL = "RecoveryDecision"
+
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
-        attempts = shared.get("debug_attempts", 0) + 1
-        shared["debug_attempts"] = attempts
+        attempts = track_attempts(shared)
+        max_attempts = shared.get("max_debug_attempts", 3)
+        error_type = shared.get("error_type", "")
+        _logger.info(
+            "[RecoveryDecision.prep] attempt %d/%d, error_type=%s",
+            attempts,
+            max_attempts,
+            error_type,
+        )
         return {
             "debug_attempts": attempts,
-            "max_debug_attempts": shared.get("max_debug_attempts", 3),
-            "error_type": shared.get("error_type", ""),
+            "max_debug_attempts": max_attempts,
+            "error_type": error_type,
         }
 
     def exec(self, prep_res: dict[str, Any]) -> str:
@@ -580,7 +937,14 @@ class RecoveryDecisionNode(Node):
         attempts = pr.get("debug_attempts", 0)
         max_attempts = pr.get("max_debug_attempts", 3)
         _log_step(
-            shared, "RecoveryDecision", f"action={exec_res} ({attempts}/{max_attempts})"
+            shared,
+            self.NODE_LABEL,
+            f"action={exec_res} ({attempts}/{max_attempts})",
+            extra={
+                "attempt": attempts,
+                "max_attempts": max_attempts,
+                "action": exec_res,
+            },
         )
         return "default"
 
@@ -589,6 +953,8 @@ class RecoveryDecisionNode(Node):
 
 
 class ResultAnalyzerNode(Node):
+    NODE_LABEL = "ResultAnalyzer"
+
     def __init__(self) -> None:
         super().__init__(max_retries=2, wait=1)
 
@@ -599,6 +965,14 @@ class ResultAnalyzerNode(Node):
             and sql_result.get("success", False)
             and sql_result.get("rows")
         )
+        attempts = shared.get("debug_attempts", 0)
+        max_attempts = shared.get("max_debug_attempts", 3)
+        _logger.info(
+            "[ResultAnalyzer.prep] has_results=%s debug=%d/%d",
+            has_results,
+            attempts,
+            max_attempts,
+        )
         return {
             "clean_message": shared.get("clean_message", ""),
             "sql_result": sql_result,
@@ -606,23 +980,36 @@ class ResultAnalyzerNode(Node):
             "history_context": shared.get("history_context", ""),
             "api_key": shared["openrouter_api_key"],
             "model": shared["openrouter_model"],
-            "debug_attempts": shared.get("debug_attempts", 0),
-            "max_debug_attempts": shared.get("max_debug_attempts", 3),
+            "debug_attempts": attempts,
+            "max_debug_attempts": max_attempts,
         }
 
     def exec(self, prep_res: dict[str, Any]) -> str:
-        system_prompt = _load_prompt("result_analyzer_prompt.txt")
+        system_prompt = get_prompt_cached("result_analyzer_prompt.txt")
         if prep_res["has_results"]:
             sql_result = prep_res["sql_result"]
             table_str = format_results_table(sql_result["columns"], sql_result["rows"])
             elapsed = sql_result.get("elapsed_ms", 0)
+            row_count = len(sql_result.get("rows", []))
+            col_count = len(sql_result.get("columns", []))
             results_section = f"Query results ({elapsed:.0f}ms):\n\n{table_str}"
+            _logger.info(
+                "[ResultAnalyzer.exec] narrating %d rows x %d cols (model=%s)...",
+                row_count,
+                col_count,
+                prep_res.get("model", "?"),
+            )
         else:
             results_section = (
                 "The query could not be completed. "
                 f"After {prep_res['debug_attempts']} of {prep_res['max_debug_attempts']} "
                 "attempts, the system was unable to generate a valid query. "
                 "Please try rephrasing your question."
+            )
+            _logger.info(
+                "[ResultAnalyzer.exec] no results — narrating failure after %d/%d attempts",
+                prep_res["debug_attempts"],
+                prep_res["max_debug_attempts"],
             )
 
         prompt = system_prompt.format(
@@ -636,6 +1023,7 @@ class ResultAnalyzerNode(Node):
         )
 
     def exec_fallback(self, prep_res: Any, exc: Exception) -> str:
+        _logger.warning("[ResultAnalyzer] fallback narration due to error: %s", exc)
         return (
             "I wasn't able to analyze the results. Please try rephrasing your question."
         )
@@ -645,17 +1033,29 @@ class ResultAnalyzerNode(Node):
         pr = prep_res or {}
         has_results = pr.get("has_results", False)
         _log_step(
-            shared, "ResultAnalyzer", f"narrative generated (has_data={has_results})"
+            shared,
+            self.NODE_LABEL,
+            f"narrative generated ({len(exec_res)} chars, has_data={has_results})",
+            extra={"narrative_chars": len(exec_res), "has_data": has_results},
         )
         return "default"
 
 
 class ResponseBuilderNode(Node):
+    NODE_LABEL = "ResponseBuilder"
+
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
+        narrative = shared.get("result_analysis", "")
+        sql = shared.get("response_sql")
+        _logger.debug(
+            "[ResponseBuilder.prep] narrative=%d chars, sql=%s",
+            len(narrative),
+            f"{len(sql)} chars" if sql else "None",
+        )
         return {
-            "result_analysis": shared.get("result_analysis", ""),
+            "result_analysis": narrative,
             "sql_result": shared.get("sql_result"),
-            "response_sql": shared.get("response_sql"),
+            "response_sql": sql,
             "debug_attempts": shared.get("debug_attempts", 0),
             "max_debug_attempts": shared.get("max_debug_attempts", 3),
         }
@@ -670,53 +1070,136 @@ class ResponseBuilderNode(Node):
         if sql_result and sql_result.get("success") and sql_result.get("rows"):
             table_md = format_results_table(sql_result["columns"], sql_result["rows"])
             elapsed_ms = sql_result.get("elapsed_ms")
+            row_count = len(sql_result.get("rows", []))
+            _logger.debug(
+                "[ResponseBuilder.exec] formatting markdown: %d narrative chars + %d-row table",
+                len(narrative),
+                row_count,
+            )
 
-        return format_response_markdown(
+        result = format_response_markdown(
             narrative=narrative,
             table_md=table_md,
             sql=sql,
             elapsed_ms=elapsed_ms,
         )
+        _logger.debug("[ResponseBuilder.exec] final markdown=%d chars", len(result))
+        return result
 
     def post(self, shared: dict[str, Any], prep_res: Any, exec_res: str) -> str:
         shared["response"] = exec_res
-        chat_history: list = shared.setdefault("chat_history", [])
-        chat_history.append({
-            "role": "assistant",
-            "content": exec_res,
-            "sql": prep_res.get("response_sql"),
-            "error": prep_res.get("sql_result") is None
-            or not prep_res["sql_result"].get("success", False),
-        })
-        _log_step(shared, "ResponseBuilder", "final response built")
+        has_sql = prep_res.get("response_sql") is not None
+        has_error = prep_res.get("sql_result") is None or not prep_res[
+            "sql_result"
+        ].get("success", False)
+        _append_assistant_turn(
+            shared,
+            content=exec_res,
+            sql=prep_res.get("response_sql"),
+            error=has_error,
+        )
+        _log_step(
+            shared,
+            self.NODE_LABEL,
+            f"final response built ({len(exec_res)} chars, sql={has_sql})",
+            extra={
+                "response_chars": len(exec_res),
+                "has_sql": has_sql,
+                "has_error": has_error,
+            },
+        )
         return "default"
+
+
+# ── SQL Validation Stage ───────────────────────────────────────────────────
+
+
+class SQLValidatorNode(Node):
+    NODE_LABEL = "SQLValidator"
+
+    def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
+        sql = shared.get("generated_sql", "")
+        _logger.debug("[SQLValidator.prep] validating SQL (%d chars)", len(sql))
+        return {
+            "generated_sql": sql,
+            "db_path": shared["db_path"],
+            "schema_by_table": shared.get("schema_by_table", {}),
+        }
+
+    def exec(self, prep_res: dict[str, Any]) -> dict[str, Any]:
+        sql = prep_res["generated_sql"]
+        schema = prep_res["schema_by_table"]
+        db_path = prep_res["db_path"]
+        _logger.info(
+            "[SQLValidator.exec] pre-flight schema check on SQL (%d chars)", len(sql)
+        )
+        result = validate_sql_columns(sql, schema, db_path)
+        return result
+
+    def post(
+        self, shared: dict[str, Any], prep_res: Any, exec_res: dict[str, Any]
+    ) -> str:
+        if exec_res.get("valid"):
+            _log_step(shared, self.NODE_LABEL, "schema validation passed")
+            return "default"
+        errors = exec_res.get("errors", [])
+        hints = exec_res.get("hints", [])
+        error_summary = "; ".join(errors[:3]) if errors else "unknown validation error"
+        _log_step(
+            shared,
+            self.NODE_LABEL,
+            f"validation failed: {error_summary}",
+            status="error",
+            extra={"errors": errors, "hints": hints},
+        )
+        shared["validation_errors"] = errors
+        shared["validation_hints"] = hints
+        shared["execution_error"] = error_summary
+        shared["generated_sql"] = shared.get("generated_sql", "")
+        return "error"
 
 
 # ── Chat Stage ──────────────────────────────────────────────────────────────
 
 
 class ChatResponderNode(Node):
+    NODE_LABEL = "ChatResponder"
+
     def __init__(self) -> None:
         super().__init__(max_retries=2, wait=1)
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
+        intent = shared.get("intent", "chat")
+        clean = shared.get("clean_message", "")
+        _logger.debug(
+            "[ChatResponder.prep] intent=%s, message='%s'",
+            intent,
+            clean[:60],
+        )
         return {
-            "clean_message": shared.get("clean_message", ""),
-            "intent": shared.get("intent", "chat"),
+            "clean_message": clean,
+            "intent": intent,
             "history_context": shared.get("history_context", ""),
             "api_key": shared["openrouter_api_key"],
             "model": shared["openrouter_model"],
         }
 
     def exec(self, prep_res: dict[str, Any]) -> str:
-        system_prompt = _load_prompt("chat_responder_prompt.txt")
+        intent = prep_res["intent"]
+        _logger.info(
+            "[ChatResponder.exec] generating chat response (model=%s, intent=%s)...",
+            prep_res.get("model", "?"),
+            intent,
+        )
+        system_prompt = get_prompt_cached("chat_responder_prompt.txt")
         clarify_instruction = ""
-        if prep_res["intent"] == "clarify":
+        if intent == "clarify":
             clarify_instruction = (
                 "\n\nThe user's question is ambiguous. Ask a targeted follow-up "
                 "question to clarify what they want (e.g., career stats, recent games, "
                 "comparisons, specific seasons)."
             )
+            _logger.debug("[ChatResponder.exec] adding clarify instruction")
         prompt = system_prompt.format(clarify_instruction=clarify_instruction)
         return call_llm(
             prompt=prep_res["clean_message"],
@@ -726,16 +1209,16 @@ class ChatResponderNode(Node):
         )
 
     def exec_fallback(self, prep_res: Any, exc: Exception) -> str:
+        _logger.warning("[ChatResponder] fallback due to error: %s", exc)
         return "I'm sorry, I couldn't process that request. Could you try again?"
 
     def post(self, shared: dict[str, Any], prep_res: Any, exec_res: str) -> str:
         shared["response"] = exec_res
-        chat_history: list = shared.setdefault("chat_history", [])
-        chat_history.append({
-            "role": "assistant",
-            "content": exec_res,
-            "sql": None,
-            "error": False,
-        })
-        _log_step(shared, "ChatResponder", "chat response generated")
+        _append_assistant_turn(shared, content=exec_res)
+        _log_step(
+            shared,
+            self.NODE_LABEL,
+            f"chat response generated ({len(exec_res)} chars)",
+            extra={"response_chars": len(exec_res)},
+        )
         return "default"
