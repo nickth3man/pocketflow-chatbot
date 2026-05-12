@@ -137,7 +137,7 @@ class TestCallLlmStructured:
         """When regex fallback finds only a subset of required fields, it should still raise."""
         mocker.patch(
             "utils.call_llm_structured.call_llm",
-            return_value="thinking: some thought\nunrelated: value",
+            return_value="  thinking: some thought\n  - bad yaml",
         )
         with pytest.raises(ValueError, match=r"Required fields.*sql.*missing"):
             call_llm_structured("prompt", "key", "model", ["thinking", "sql"])

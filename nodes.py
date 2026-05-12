@@ -891,6 +891,8 @@ class FixValidatorNode(Node):
         is_safe, reason = exec_res
         if is_safe:
             shared["generated_sql"] = shared.get("fixed_sql", "")
+        else:
+            shared.pop("fixed_sql", None)
         status = "complete" if is_safe else "error"
         _log_step(
             shared,
