@@ -21,9 +21,12 @@ from nodes import (
     SQLGeneratorNode,
     SQLValidatorNode,
     TableSelectorNode,
+    _log_step,
 )
 
 _logger = logging.getLogger("nba_chatbot")
+
+ERROR_RECOVERY_FLOW_LABEL = "ErrorRecoveryFlow"
 
 
 class ErrorRecoveryFlow(Flow):
@@ -31,11 +34,10 @@ class ErrorRecoveryFlow(Flow):
         action = str(shared.get("recovery_action", "give_up"))
         attempts = shared.get("debug_attempts", 0)
         max_attempts = shared.get("max_debug_attempts", 3)
-        _logger.info(
-            "[ErrorRecoveryFlow] decision=%s (%d/%d attempts used)",
-            action,
-            attempts,
-            max_attempts,
+        _log_step(
+            shared,
+            ERROR_RECOVERY_FLOW_LABEL,
+            f"decision={action} ({attempts}/{max_attempts} attempts)",
             extra={
                 "subflow": "error_recovery",
                 "action": action,
@@ -43,11 +45,6 @@ class ErrorRecoveryFlow(Flow):
                 "max_attempts": max_attempts,
             },
         )
-        shared.setdefault("step_logs", []).append({
-            "node": "ErrorRecoveryFlow",
-            "status": "complete",
-            "summary": f"sub-flow action={action} ({attempts}/{max_attempts})",
-        })
         return action
 
 
@@ -108,6 +105,7 @@ def create_chat_flow() -> Flow:
 
     sql_validator = SQLValidatorNode()
     sql_generator >> sql_validator >> sql_executor
+    sql_generator - "generation_failed" >> response_builder
     sql_validator - "error" >> error_recovery_flow
     _logger.debug("[Flow] execution: SQLGenerator → SQLValidator → SQLExecutor")
 

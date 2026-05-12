@@ -8,6 +8,7 @@ from utils.attempt_tracker import reset_attempts, track_attempts
 from utils.call_llm import call_llm
 from utils.call_llm_structured import call_llm_structured
 from utils.classify_error import classify_error
+from utils.context_trimmer import trim_chat_history
 from utils.execute_query import execute_query
 from utils.format_response_markdown import format_response_markdown
 from utils.format_results_table import format_results_table
@@ -21,6 +22,14 @@ from utils.validate_sql_safety import validate_sql_safety
 _logger = logging.getLogger("nba_chatbot")
 
 _VALID_INTENTS = frozenset({"query_db", "chat", "clarify"})
+
+_ERROR_TRUNC_CHARS = 80
+_ERROR_EXTRAS_TRUNC_CHARS = 200
+_RAW_INPUT_TRUNC_CHARS = 100
+_CLEAN_MSG_TRUNC_CHARS = 80
+_HISTORY_ENTRY_COUNT = 6
+_HISTORY_CONTENT_TRUNC_CHARS = 200
+_SQL_TRUNC_CHARS = 500
 
 
 def _ensure_str(val: Any, sep: str = "\n") -> str:
@@ -84,6 +93,7 @@ def _append_assistant_turn(
         "sql": sql,
         "error": error,
     })
+    shared["chat_history"] = trim_chat_history(shared["chat_history"])
 
 
 def _run_stage(
@@ -107,10 +117,10 @@ def _run_stage(
             shared,
             node_name,
             stage,
-            f"✗ {str(e)[:80]}",
+            f"✗ {str(e)[:_ERROR_TRUNC_CHARS]}",
             elapsed_ms=elapsed,
             status="error",
-            extra={"error": str(e)[:200]},
+            extra={"error": str(e)[:_ERROR_EXTRAS_TRUNC_CHARS]},
         )
         raise
 
@@ -129,7 +139,7 @@ class MessagePreprocessorNode(Node):
         _logger.info(
             "[Preprocess.prep] raw input=%d chars, first 100: %s",
             len(raw),
-            raw[:100],
+            raw[:_RAW_INPUT_TRUNC_CHARS],
         )
         return {
             "user_message": raw,
@@ -170,7 +180,7 @@ class MessagePreprocessorNode(Node):
         _log_step(
             shared,
             self.NODE_LABEL,
-            f"cleaned '{clean[:80]}' entities={entities_summary}",
+            f"cleaned '{clean[:_CLEAN_MSG_TRUNC_CHARS]}' entities={entities_summary}",
             extra={"clean_chars": len(clean), "entity_keys": list(entities.keys())},
         )
         return "default"
@@ -187,7 +197,7 @@ class HistoryContextBuilderNode(Node):
         _logger.debug(
             "[HistoryContext.prep] %d total entries, taking last 6", len(history)
         )
-        return history[-6:]
+        return history[-_HISTORY_ENTRY_COUNT:]
 
     def exec(self, prep_res: list[dict[str, Any]]) -> str:
         if not prep_res:
@@ -200,9 +210,11 @@ class HistoryContextBuilderNode(Node):
             sql = entry.get("sql")
             if sql:
                 intent = sql.strip()[:80]
-                lines.append(f'[{role}: "{content[:200]}" / SQL: ({intent})]')
+                lines.append(
+                    f'[{role}: "{content[:_HISTORY_CONTENT_TRUNC_CHARS]}" / SQL: ({intent})]'
+                )
             else:
-                lines.append(f'[{role}: "{content[:200]}"]')
+                lines.append(f'[{role}: "{content[:_HISTORY_CONTENT_TRUNC_CHARS]}"]')
         result = "\n".join(lines)
         _logger.debug(
             "[HistoryContext.exec] formatted %d history entries into %d chars",
@@ -232,14 +244,18 @@ class IntentClassifierNode(Node):
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
         clean = shared.get("clean_message", "")
         history = shared.get("history_context", "")
+        schema_by_table = shared.get("schema_by_table", {})
+        available_tables = ", ".join(schema_by_table.keys())
         _logger.debug(
-            "[IntentClassifier.prep] clean='%s' history=%d chars",
+            "[IntentClassifier.prep] clean='%s' history=%d chars tables=%d",
             clean[:60],
             len(history),
+            len(schema_by_table),
         )
         return {
             "clean_message": clean,
             "history_context": history,
+            "available_tables": available_tables,
             "api_key": shared["openrouter_api_key"],
             "model": shared["openrouter_model"],
             "system_prompt": get_prompt_cached("intent_classifier_prompt.txt"),
@@ -252,7 +268,8 @@ class IntentClassifierNode(Node):
         )
         prompt = (
             f"User message: {prep_res['clean_message']}\n\n"
-            f"Conversation context:\n{prep_res['history_context']}"
+            f"Conversation context:\n{prep_res['history_context']}\n\n"
+            f"Available tables in database: {prep_res['available_tables']}"
         )
         return call_llm_structured(
             prompt=prompt,
@@ -347,6 +364,12 @@ class TableSelectorNode(Node):
         self, shared: dict[str, Any], prep_res: Any, exec_res: dict[str, Any]
     ) -> str:
         selected = exec_res["tables"]
+        selected = [
+            t.get("table", t.get("name", next(iter(t.values()), "")))
+            if isinstance(t, dict)
+            else str(t)
+            for t in selected
+        ]
         reason = _ensure_str(exec_res.get("reason", ""))
         schema_by_table = prep_res["schema_by_table"]
         shared["selected_tables"] = selected
@@ -536,6 +559,24 @@ class SQLGeneratorNode(Node):
         return "SELECT 'SQL generation failed after retries' AS error;"
 
     def post(self, shared: dict[str, Any], prep_res: Any, exec_res: str) -> str:
+        if exec_res == "SELECT 'SQL generation failed after retries' AS error;":
+            error_msg = (
+                "I'm sorry, I couldn't generate a valid SQL query for your question. "
+                "Please try rephrasing it."
+            )
+            shared["result_analysis"] = error_msg
+            shared["sql_result"] = None
+            shared["response_sql"] = None
+            shared["generated_sql"] = None
+            _append_assistant_turn(shared, content=error_msg, error=True)
+            _log_step(
+                shared,
+                self.NODE_LABEL,
+                "SQL generation failed after retries — returning error response to user",
+                status="error",
+            )
+            return "generation_failed"
+
         optimized = optimize_sql(exec_res)
         if optimized != exec_res:
             _logger.debug(
@@ -555,7 +596,7 @@ class SQLGeneratorNode(Node):
             f"SQL ({len(optimized)} chars): {sql_preview}...",
             extra={
                 "sql_chars": len(optimized),
-                "sql_full": optimized[:500],
+                "sql_full": optimized[:_SQL_TRUNC_CHARS],
                 "is_retry": (prep_res.get("debug_attempts", 0) if prep_res else 0) > 0,
             },
         )
@@ -569,7 +610,7 @@ class SQLExecutorNode(Node):
     NODE_LABEL = "SQLExecutor"
 
     def prep(self, shared: dict[str, Any]) -> dict[str, Any]:
-        fixed_sql = shared.pop("fixed_sql", None)
+        fixed_sql = shared.get("fixed_sql")
         sql = fixed_sql if fixed_sql else shared.get("generated_sql", "")
         if fixed_sql:
             _logger.info(
@@ -602,6 +643,7 @@ class SQLExecutorNode(Node):
     def post(
         self, shared: dict[str, Any], prep_res: Any, exec_res: dict[str, Any]
     ) -> str:
+        shared.pop("fixed_sql", None)
         if exec_res["success"]:
             shared["sql_result"] = exec_res
             shared["response_sql"] = shared.get("generated_sql", "")
@@ -669,7 +711,7 @@ class ErrorAnalyzerNode(Node):
         )
         failed = shared.setdefault("failed_attempts", [])
         failed.append({
-            "sql": shared.get("generated_sql", "")[:500],
+            "sql": shared.get("generated_sql", "")[:_SQL_TRUNC_CHARS],
             "error": error_msg[:300],
             "error_type": error_type,
         })
@@ -761,7 +803,7 @@ class SchemaRecheckNode(Node):
     def exec(self, prep_res: dict[str, Any]) -> str:
         affected = prep_res["affected_entities"]
         schema_by_table = prep_res["schema_by_table"]
-        if not affected or affected == ["__nonexistent_table__"]:
+        if not affected or all(t == "__nonexistent_table__" for t in affected):
             fallback_tables = list(schema_by_table.keys())[:5]
             _logger.debug(
                 "[SchemaRecheck.exec] no valid affected entities, falling back to %s",

@@ -1,4 +1,7 @@
-def format_schema(schema_subset: dict) -> str:
+from typing import Any
+
+
+def format_schema(schema_subset: dict[str, Any]) -> str:
     lines: list[str] = []
     for table_name, info in schema_subset.items():
         columns = info.get("columns", [])

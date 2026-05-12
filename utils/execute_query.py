@@ -4,8 +4,11 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
+from typing import Any
 
 import duckdb
+
+_DEFAULT_MEMORY_LIMIT = "2GB"
 
 _logger = logging.getLogger("nba_chatbot")
 
@@ -15,30 +18,28 @@ _connections_lock = threading.Lock()
 
 
 def _get_connection(db_path: str) -> duckdb.DuckDBPyConnection:
-    con = _connections.get(db_path)
-    if con is not None:
-        return con
     with _connections_lock:
         con = _connections.get(db_path)
         if con is not None:
             return con
         con = duckdb.connect(db_path, read_only=True)
-        con.execute("SET memory_limit = '2GB'")
+        con.execute(f"SET memory_limit = '{_DEFAULT_MEMORY_LIMIT}'")
         _connections[db_path] = con
         return con
 
 
 def _close_connection() -> None:
     global _connections
-    for con in _connections.values():
-        with contextlib.suppress(Exception):
-            con.close()
-    _connections = {}
+    with _connections_lock:
+        for con in _connections.values():
+            with contextlib.suppress(Exception):
+                con.close()
+        _connections = {}
 
 
 def _run_query(
     db_path: str, sql: str, max_rows: int
-) -> tuple[list[str], list[list], float]:
+) -> tuple[list[str], list[list[Any]], float]:
     start = time.time()
     con = _get_connection(db_path)
     result = con.execute(sql)
@@ -54,7 +55,7 @@ def execute_query(
     sql: str,
     max_rows: int = 200,
     timeout_seconds: int = 30,
-) -> dict:
+) -> dict[str, Any]:
     start = time.time()
 
     stripped = sql.strip()

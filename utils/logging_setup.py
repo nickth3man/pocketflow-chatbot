@@ -11,13 +11,7 @@ class DurationFormatter(logging.Formatter):
     """Formatter that appends structured duration info when available."""
 
     def _get_attr(self, record: logging.LogRecord, name: str) -> Any:
-        val = getattr(record, name, None)
-        if val is not None:
-            return val
-        extra = getattr(record, "extra", None)
-        if isinstance(extra, dict):
-            return extra.get(name)
-        return None
+        return getattr(record, name, None)
 
     def format(self, record: logging.LogRecord) -> str:
         base = super().format(record)

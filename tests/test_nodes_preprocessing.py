@@ -102,6 +102,7 @@ class TestIntentClassifierNode:
         prep_res = {
             "clean_message": "test",
             "history_context": "",
+            "available_tables": "",
             "api_key": "k",
             "model": "m",
             "system_prompt": "",

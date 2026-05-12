@@ -309,7 +309,6 @@ class TestSQLExecutorNode:
         node = SQLExecutorNode()
         result = node.prep(shared)
         assert result["sql"] == "SELECT 2"
-        assert "fixed_sql" not in shared
 
     def test_exec_calls_execute_query(self, shared, mock_execute_query_success):
         node = SQLExecutorNode()

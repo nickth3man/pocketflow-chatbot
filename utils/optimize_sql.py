@@ -1,7 +1,7 @@
 import re
 
 _RE_LIMIT_CLAUSE = re.compile(
-    r"\bLIMIT\s+\d+(\s*OFFSET\s+\d+)?\s*$",
+    r"\bLIMIT\s+\d+(\s*OFFSET\s+\d+)?\s*;?\s*$",
     re.IGNORECASE,
 )
 

@@ -65,7 +65,7 @@ class TestEntryPoints:
     def test_build_shared_succeeds_with_valid_input(self, mocker):
         import app as app_mod
 
-        mocker.patch.object(app_mod, "get_full_schema", return_value={"dummy": {}})
+        mocker.patch("utils.shared_builder.get_full_schema", return_value={"dummy": {}})
         mocker.patch.dict(
             os.environ,
             {
@@ -83,7 +83,7 @@ class TestEntryPoints:
     def test_main_build_shared_succeeds(self, mocker):
         import main as main_mod
 
-        mocker.patch.object(main_mod, "get_full_schema", return_value={"dummy": {}})
+        mocker.patch("utils.shared_builder.get_full_schema", return_value={"dummy": {}})
         mocker.patch.dict(
             os.environ,
             {
@@ -103,7 +103,7 @@ class TestGetShared:
     def test_get_shared_initializes_once(self, mocker):
         import app as app_mod
 
-        mocker.patch.object(app_mod, "get_full_schema", return_value={"dummy": {}})
+        mocker.patch("utils.shared_builder.get_full_schema", return_value={"dummy": {}})
         mocker.patch.dict(
             os.environ,
             {
@@ -121,7 +121,7 @@ class TestGetShared:
     def test_reset_conversation_clears_shared(self, mocker):
         import app as app_mod
 
-        mocker.patch.object(app_mod, "get_full_schema", return_value={"dummy": {}})
+        mocker.patch("utils.shared_builder.get_full_schema", return_value={"dummy": {}})
         mocker.patch.dict(
             os.environ,
             {
@@ -300,7 +300,7 @@ class TestAppOnClear:
     def test_on_clear_returns_empty_and_resets(self, mocker):
         import app as app_mod
 
-        mocker.patch.object(app_mod, "get_full_schema", return_value={"dummy": {}})
+        mocker.patch("utils.shared_builder.get_full_schema", return_value={"dummy": {}})
         mocker.patch.dict(
             os.environ,
             {
@@ -381,7 +381,7 @@ class TestMainBuildSharedPaths:
     def test_main_function_one_iteration(self, mocker):
         import main as main_mod
 
-        mocker.patch.object(main_mod, "get_full_schema", return_value={"dummy": {}})
+        mocker.patch("utils.shared_builder.get_full_schema", return_value={"dummy": {}})
         mocker.patch.object(main_mod.chat_flow, "run")
         mocker.patch.dict(
             os.environ,
@@ -401,7 +401,7 @@ class TestMainBuildSharedPaths:
     def test_main_empty_input_skips(self, mocker):
         import main as main_mod
 
-        mocker.patch.object(main_mod, "get_full_schema", return_value={"dummy": {}})
+        mocker.patch("utils.shared_builder.get_full_schema", return_value={"dummy": {}})
         mocker.patch.object(main_mod.chat_flow, "run")
         mocker.patch.dict(
             os.environ,
@@ -421,7 +421,7 @@ class TestMainBuildSharedPaths:
     def test_main_eof_error_breaks(self, mocker):
         import main as main_mod
 
-        mocker.patch.object(main_mod, "get_full_schema", return_value={"dummy": {}})
+        mocker.patch("utils.shared_builder.get_full_schema", return_value={"dummy": {}})
         mocker.patch.object(main_mod.chat_flow, "run")
         mocker.patch.dict(
             os.environ,

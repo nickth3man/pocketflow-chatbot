@@ -1,7 +1,10 @@
+from typing import Any
+
+
 def get_schema_subset(
-    schema_by_table: dict,
-    table_names: list,
-) -> dict:
+    schema_by_table: dict[str, Any],
+    table_names: list[str | dict[str, str]],
+) -> dict[str, Any]:
     result = {}
     for name in table_names:
         # LLM sometimes returns dicts (e.g. {table: x, column: y}) instead of strings
